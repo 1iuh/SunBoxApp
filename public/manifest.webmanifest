@@ -1,0 +1,25 @@
+{
+  "name": "SunBox Control",
+  "short_name": "SunBox",
+  "description": "SunBox 温控面板，局域网直连 ESP32。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fffdf8",
+  "theme_color": "#f9c742",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

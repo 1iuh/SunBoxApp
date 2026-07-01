@@ -1,74 +1,36 @@
-const DEFAULT_BASE_URL = 'http://192.168.4.1'
-const MOCK_MODE_KEY = 'sunbox-mock-mode'
-const MOCK_CONFIG_KEY = 'sunbox-mock-config'
+// 默认使用与页面相同的域（同源）：面板和 ESP32 由同一台 HTTP 服务托管时留空即可
+const DEFAULT_BASE_URL = ''
+const BASE_URL_COOKIE = 'sunbox-esp32-base-url'
 
-const defaultMockConfig = {
-  dayStart: '08:00',
-  nightStart: '20:00',
-  dayMinTemp: 30.0,
-  dayMaxTemp: 32.0,
-  nightMinTemp: 26.0,
-  nightMaxTemp: 28.0
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
-function readMockConfig() {
-  const saved = localStorage.getItem(MOCK_CONFIG_KEY)
-  if (!saved) {
-    return { ...defaultMockConfig }
+function readCookie(name) {
+  const prefix = `${name}=`
+  const entries = document.cookie ? document.cookie.split(';') : []
+  for (const entry of entries) {
+    const trimmed = entry.trim()
+    if (trimmed.startsWith(prefix)) {
+      try {
+        return decodeURIComponent(trimmed.slice(prefix.length))
+      } catch {
+        return trimmed.slice(prefix.length)
+      }
+    }
   }
-
-  try {
-    return { ...defaultMockConfig, ...JSON.parse(saved) }
-  } catch {
-    return { ...defaultMockConfig }
-  }
+  return ''
 }
 
-function writeMockConfig(config) {
-  localStorage.setItem(MOCK_CONFIG_KEY, JSON.stringify(config))
-}
-
-function buildMockStatus() {
-  const config = readMockConfig()
-  const hour = new Date().getHours()
-  const dayStartHour = Number.parseInt(config.dayStart.slice(0, 2), 10)
-  const nightStartHour = Number.parseInt(config.nightStart.slice(0, 2), 10)
-  const isNight = hour >= nightStartHour || hour < dayStartHour
-
-  return {
-    mode: isNight ? 'night' : 'day',
-    temperatureC: isNight ? 26.4 : 31.8,
-    humidity: isNight ? 68.2 : 59.4,
-    wifiConnected: true,
-    timeSynced: true,
-    sensorReady: true,
-    relays: {
-      dayHeat: !isNight && false,
-      nightHeat: isNight && true,
-      uvb: !isNight
-    },
-    config
-  }
+function writeCookie(name, value) {
+  // expires in the year 9999 → effectively infinite lifetime
+  const encoded = encodeURIComponent(value)
+  const expires = `expires=Tue, 31 Dec 9999 23:59:59 GMT`
+  document.cookie = `${name}=${encoded}; ${expires}; path=/; SameSite=Lax`
 }
 
 export function getEsp32BaseUrl() {
-  return localStorage.getItem('sunbox-esp32-base-url') || DEFAULT_BASE_URL
+  return readCookie(BASE_URL_COOKIE) || DEFAULT_BASE_URL
 }
 
 export function setEsp32BaseUrl(url) {
-  localStorage.setItem('sunbox-esp32-base-url', url.trim())
-}
-
-export function getMockMode() {
-  return localStorage.getItem(MOCK_MODE_KEY) !== 'false'
-}
-
-export function setMockMode(enabled) {
-  localStorage.setItem(MOCK_MODE_KEY, String(enabled))
+  writeCookie(BASE_URL_COOKIE, url.trim())
 }
 
 async function request(path, options = {}, baseUrl = getEsp32BaseUrl()) {
@@ -90,70 +52,56 @@ async function request(path, options = {}, baseUrl = getEsp32BaseUrl()) {
   return data
 }
 
-export function fetchDeviceStatus(baseUrl = getEsp32BaseUrl()) {
-  return request('/api/status', {}, baseUrl)
-}
-
-export function fetchDeviceConfig(baseUrl = getEsp32BaseUrl()) {
-  return request('/api/config', {}, baseUrl)
-}
-
-export function saveDeviceConfig(config, baseUrl = getEsp32BaseUrl()) {
+function postJson(path, body, baseUrl = getEsp32BaseUrl()) {
   return request(
-    '/api/config',
+    path,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(config)
+      body: JSON.stringify(body)
     },
     baseUrl
   )
 }
 
+// GET /api/status — runtime status, sensor state, relay state, pins and active rules.
+export function fetchDeviceStatus(baseUrl = getEsp32BaseUrl()) {
+  return request('/api/status', {}, baseUrl)
+}
+
+// GET /api/rules — persisted mode rules (schedule, thresholds, per-relay roles).
+export function fetchDeviceRules(baseUrl = getEsp32BaseUrl()) {
+  return request('/api/rules', {}, baseUrl)
+}
+
+// POST /api/rules — update the full mode-rule configuration.
+export function saveDeviceRules(rules, baseUrl = getEsp32BaseUrl()) {
+  return postJson('/api/rules', rules, baseUrl)
+}
+
+// POST /api/config/reset — reset mode rules to firmware defaults.
 export function resetDeviceConfig(baseUrl = getEsp32BaseUrl()) {
-  return request(
-    '/api/config/reset',
-    {
-      method: 'POST'
-    },
-    baseUrl
-  )
+  return request('/api/config/reset', { method: 'POST' }, baseUrl)
 }
 
-export async function fetchMockDeviceStatus() {
-  await sleep(280)
-  return buildMockStatus()
+// POST /api/power — global power switch.
+export function setDevicePower(on, baseUrl = getEsp32BaseUrl()) {
+  return postJson('/api/power', { on }, baseUrl)
 }
 
-export async function fetchMockDeviceConfig() {
-  await sleep(180)
-  return readMockConfig()
+// POST /api/relays — manually toggle a single relay (60s manual override).
+export function toggleDeviceRelay(relay, on, baseUrl = getEsp32BaseUrl()) {
+  return postJson('/api/relays', { relay, on }, baseUrl)
 }
 
-export async function saveMockDeviceConfig(config) {
-  await sleep(320)
-  const nextConfig = {
-    dayStart: config.dayStart,
-    nightStart: config.nightStart,
-    dayMinTemp: Number(config.dayMinTemp),
-    dayMaxTemp: Number(config.dayMaxTemp),
-    nightMinTemp: Number(config.nightMinTemp),
-    nightMaxTemp: Number(config.nightMaxTemp)
-  }
-  writeMockConfig(nextConfig)
-  return {
-    ok: true,
-    config: nextConfig
-  }
+// GET /api/pins — current relay-to-pin mapping.
+export function fetchDevicePins(baseUrl = getEsp32BaseUrl()) {
+  return request('/api/pins', {}, baseUrl)
 }
 
-export async function resetMockDeviceConfig() {
-  await sleep(260)
-  writeMockConfig(defaultMockConfig)
-  return {
-    ok: true,
-    message: 'config reset to default'
-  }
+// POST /api/pins — update the relay-to-pin mapping.
+export function saveDevicePins(pins, baseUrl = getEsp32BaseUrl()) {
+  return postJson('/api/pins', pins, baseUrl)
 }

@@ -1,17 +1,14 @@
 ﻿<script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
-  fetchDeviceConfig,
-  fetchMockDeviceConfig,
-  fetchMockDeviceStatus,
   fetchDeviceStatus,
-  getMockMode,
-  getEsp32BaseUrl,
-  resetMockDeviceConfig,
+  fetchDeviceRules,
+  saveDeviceRules,
   resetDeviceConfig,
-  saveMockDeviceConfig,
-  saveDeviceConfig,
-  setMockMode,
+  setDevicePower,
+  toggleDeviceRelay,
+  saveDevicePins,
+  getEsp32BaseUrl,
   setEsp32BaseUrl
 } from './lib/esp32'
 
@@ -24,9 +21,8 @@ const tabs = [
 
 const activeTab = ref('home')
 const baseUrl = ref(getEsp32BaseUrl())
-const mockMode = ref(getMockMode())
 const syncState = ref('idle')
-const syncMessage = ref('当前显示的是本地演示数据，配置好设备地址后可直接同步 ESP32。')
+const syncMessage = ref('配置好设备地址后即可同步 ESP32 状态与配置。')
 const busyAction = ref('')
 const daySaveState = ref('idle')
 const nightSaveState = ref('idle')
@@ -37,35 +33,44 @@ let lastSavedNightConfig = ''
 let syncTimer = null
 
 const device = reactive({
-  currentTemp: 32.5,
-  humidity: 61,
-  mode: '鏃ラ棿妯″紡',
-  status: '鐘舵€侊細绛夊緟鍚屾',
+  currentTemp: 0,
+  humidity: 0,
+  mode: 'day',
+  status: '状态：等待同步',
   wifiConnected: false,
   timeSynced: false,
   sensorReady: false,
+  powerEnabled: true,
+  manualOverride: false,
   relays: {
     dayHeat: false,
     nightHeat: false,
-    uvb: false
+    uvb: false,
+    relay4: false
   },
-  relayModes: {
-    dayHeat: 'heat',
-    uvb: 'on',
-    nightHeat: 'off'
+  pins: {
+    i2cSda: 1,
+    i2cScl: 0,
+    relayDayHeat: 3,
+    relayNightHeat: 4,
+    relayDayUvb: 5,
+    relay4: 7
   },
-  relayPorts: {
-    dayHeat: 'IO3',
-    uvb: 'IO7',
-    nightHeat: 'IO4'
-  },
-  config: {
+  rules: {
     dayStart: '08:00',
     nightStart: '20:00',
     dayMinTemp: 30,
     dayMaxTemp: 32,
+    dayHeatRole: 2,
+    dayNightHeatRole: 0,
+    dayUvbRole: 1,
+    dayReservedRole: 0,
     nightMinTemp: 26,
-    nightMaxTemp: 28
+    nightMaxTemp: 28,
+    nightHeatRole: 0,
+    nightNightHeatRole: 2,
+    nightUvbRole: 0,
+    nightReservedRole: 0
   }
 })
 
@@ -75,17 +80,64 @@ const relayModeOptions = [
   { value: 'heat', label: '加温时启用' }
 ]
 
-const relayPortOptions = ['IO3', 'IO4', 'IO7', 'IO8']
+const gpioOptions = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 
-const humidityProgress = computed(() => {
-  const value = Number.isFinite(device.humidity) ? device.humidity : 0
-  return Math.min(100, Math.max(0, value))
-})
+const homeRelays = [
+  { key: 'dayHeat', label: '日间加温' },
+  { key: 'nightHeat', label: '夜间加温' },
+  { key: 'uvb', label: 'UVB' }
+]
+
+const relayList = [
+  { key: 'dayHeat', label: '日间加温灯', icon: '☀', accent: '' },
+  { key: 'uvb', label: 'UVB 灯', icon: '◌', accent: 'muted' },
+  { key: 'nightHeat', label: '夜间加温灯', icon: '☾', accent: 'night-accent' },
+  { key: 'reserved', label: '备用继电器', icon: '◇', accent: 'muted' }
+]
+
+const pinRelayList = [
+  { key: 'relayDayHeat', label: '日间加温灯' },
+  { key: 'relayNightHeat', label: '夜间加温灯' },
+  { key: 'relayDayUvb', label: 'UVB 灯' },
+  { key: 'relay4', label: '备用继电器' }
+]
+
+const relayRoleSuffix = {
+  dayHeat: 'HeatRole',
+  nightHeat: 'NightHeatRole',
+  uvb: 'UvbRole',
+  reserved: 'ReservedRole'
+}
+
+function roleToMode(role) {
+  const value = Number(role)
+  if (value === 1) return 'on'
+  if (value === 2) return 'heat'
+  return 'off'
+}
+
+function modeToRole(mode) {
+  if (mode === 'on') return 1
+  if (mode === 'heat') return 2
+  return 0
+}
+
+function roleKeyFor(mode, relay) {
+  return `${mode}${relayRoleSuffix[relay]}`
+}
+
+function relayRoleMode(mode, relay) {
+  return roleToMode(device.rules[roleKeyFor(mode, relay)])
+}
+
+function setRelayRoleMode(mode, relay, modeValue) {
+  device.rules[roleKeyFor(mode, relay)] = modeToRole(modeValue)
+}
 
 function getTempGaugeGeometry() {
   const gaugeArcDeg = 280
-  const dayMin = Number(device.config.dayMinTemp)
-  const dayMax = Number(device.config.dayMaxTemp)
+  const dayMin = Number(device.rules.dayMinTemp)
+  const dayMax = Number(device.rules.dayMaxTemp)
   const lowBound = dayMin - 5
   const highBound = dayMax + 5
   const totalRange = Math.max(1, highBound - lowBound)
@@ -127,25 +179,22 @@ const gaugeArcStyle = computed(() => {
   } = getTempGaugeGeometry()
   const safeTemp = Math.min(highBound, Math.max(lowBound, Number(device.currentTemp)))
   const tempCurrentDeg = ((safeTemp - lowBound) / totalRange) * gaugeArcDeg
-  const humidityCurrentDeg = (humidityProgress.value / 100) * gaugeArcDeg
 
   return {
     '--gauge-start-angle': `${gaugeStartDeg}deg`,
     '--gauge-arc-deg': `${gaugeArcDeg}deg`,
-    '--temp-low-deg': `${lowDeg}deg`,
-    '--temp-mid-end-deg': `${lowDeg + midDeg}deg`,
     '--temp-arc-end-deg': `${lowDeg + midDeg + highDeg}deg`,
-    '--temp-needle-angle': `${gaugeStartDeg + tempCurrentDeg}deg`,
-    '--humidity-progress-deg': `${humidityCurrentDeg}deg`,
-    '--humidity-needle-angle': `${gaugeStartDeg + humidityCurrentDeg}deg`
+    '--temp-progress-deg': `${tempCurrentDeg}deg`,
+    '--temp-needle-angle': `${gaugeStartDeg + tempCurrentDeg}deg`
   }
 })
 
 const dayModeLabel = computed(() => {
-  return device.mode === 'night' ? '澶滈棿妯″紡 (Night Mode)' : '鏃ラ棿妯″紡 (Day Mode)'
+  return device.mode === 'night' ? '夜间模式 (Night Mode)' : '日间模式 (Day Mode)'
 })
 
 const deviceIndicators = computed(() => [
+  { label: '湿度', value: `${device.humidity.toFixed(0)}%` },
   { label: 'Wi-Fi', value: device.wifiConnected ? '已连接' : '未连接' },
   { label: '时钟', value: device.timeSynced ? '已同步' : '未同步' },
   { label: '传感器', value: device.sensorReady ? '正常' : '异常' }
@@ -157,9 +206,6 @@ const topSyncLabel = computed(() => {
   }
   if (syncState.value === 'error') {
     return '同步失败'
-  }
-  if (mockMode.value) {
-    return 'Mock 模式'
   }
   if (syncState.value === 'success') {
     return '已连接'
@@ -196,8 +242,8 @@ const nightSaveLabel = computed(() => {
 const dayRangeStyle = computed(() => {
   const minLimit = 18
   const maxLimit = 40
-  const start = ((device.config.dayMinTemp - minLimit) / (maxLimit - minLimit)) * 100
-  const end = ((device.config.dayMaxTemp - minLimit) / (maxLimit - minLimit)) * 100
+  const start = ((device.rules.dayMinTemp - minLimit) / (maxLimit - minLimit)) * 100
+  const end = ((device.rules.dayMaxTemp - minLimit) / (maxLimit - minLimit)) * 100
   return {
     '--range-start': `${Math.max(0, Math.min(start, 100))}%`,
     '--range-end': `${Math.max(0, Math.min(end, 100))}%`
@@ -207,8 +253,8 @@ const dayRangeStyle = computed(() => {
 const nightRangeStyle = computed(() => {
   const minLimit = 15
   const maxLimit = 32
-  const start = ((device.config.nightMinTemp - minLimit) / (maxLimit - minLimit)) * 100
-  const end = ((device.config.nightMaxTemp - minLimit) / (maxLimit - minLimit)) * 100
+  const start = ((device.rules.nightMinTemp - minLimit) / (maxLimit - minLimit)) * 100
+  const end = ((device.rules.nightMaxTemp - minLimit) / (maxLimit - minLimit)) * 100
   return {
     '--range-start': `${Math.max(0, Math.min(start, 100))}%`,
     '--range-end': `${Math.max(0, Math.min(end, 100))}%`
@@ -216,8 +262,8 @@ const nightRangeStyle = computed(() => {
 })
 
 const scheduleRangeStyle = computed(() => {
-  const start = (parseHour(device.config.dayStart) / 23) * 100
-  const end = (parseHour(device.config.nightStart) / 23) * 100
+  const start = (parseHour(device.rules.dayStart) / 23) * 100
+  const end = (parseHour(device.rules.nightStart) / 23) * 100
   return {
     '--range-start': `${Math.max(0, Math.min(start, 100))}%`,
     '--range-end': `${Math.max(0, Math.min(end, 100))}%`
@@ -225,8 +271,8 @@ const scheduleRangeStyle = computed(() => {
 })
 
 const nightScheduleRangeStyle = computed(() => {
-  const start = (parseHour(device.config.dayStart) / 23) * 100
-  const end = (parseHour(device.config.nightStart) / 23) * 100
+  const start = (parseHour(device.rules.dayStart) / 23) * 100
+  const end = (parseHour(device.rules.nightStart) / 23) * 100
   return {
     '--range-start': `${Math.max(0, Math.min(start, 100))}%`,
     '--range-end': `${Math.max(0, Math.min(end, 100))}%`
@@ -234,7 +280,7 @@ const nightScheduleRangeStyle = computed(() => {
 })
 
 function formatTempMark(value) {
-  return Number.isInteger(value) ? `${value}掳C` : `${value.toFixed(1)}掳C`
+  return Number.isInteger(value) ? `${value}°C` : `${value.toFixed(1)}°C`
 }
 
 function polarLabelStyle(angleDeg, radius) {
@@ -276,36 +322,15 @@ function polarTempLabelStyle(angleDeg, radius) {
   }
 }
 
-const tempGaugeMarks = computed(() => {
-  const { polarStartDeg, gaugeArcDeg, dayMin, dayMax, lowBound, highBound, totalRange } = getTempGaugeGeometry()
-
-  const values = [
-    { id: 'low', value: lowBound },
-    { id: 'min', value: dayMin },
-    { id: 'max', value: dayMax },
-    { id: 'high', value: highBound }
-  ]
-
-  return values.map(({ id, value }) => {
-    const progress = ((value - lowBound) / totalRange) * gaugeArcDeg
-    return {
-      id,
-      valueLabel: formatTempMark(value),
-      style: polarTempLabelStyle(polarStartDeg + progress, 105)
-    }
-  })
-})
-
-const humidityGaugeMarks = computed(() => {
-  const { polarStartDeg, gaugeArcDeg } = getTempGaugeGeometry()
-  return [
-    { id: 'dry', valueLabel: '30%', style: polarLabelStyle(polarStartDeg + gaugeArcDeg * 0.15, 88) },
-    { id: 'ideal', valueLabel: '60%', style: polarLabelStyle(polarStartDeg + gaugeArcDeg * 0.5, 82) },
-    { id: 'wet', valueLabel: '80%', style: polarLabelStyle(polarStartDeg + gaugeArcDeg * 0.85, 88) }
-  ]
-})
-
 function modeStatusText() {
+  if (!device.powerEnabled) {
+    return '状态：电源已关闭'
+  }
+
+  if (device.manualOverride) {
+    return '状态：手动控制中'
+  }
+
   if (!device.sensorReady) {
     return '状态：传感器未就绪'
   }
@@ -352,22 +377,22 @@ function calculateWindowHours(startValue, endValue) {
 
 function updateDayMinTemp(value) {
   const nextValue = Number(value)
-  device.config.dayMinTemp = Math.min(nextValue, device.config.dayMaxTemp)
+  device.rules.dayMinTemp = Math.min(nextValue, device.rules.dayMaxTemp)
 }
 
 function updateDayMaxTemp(value) {
   const nextValue = Number(value)
-  device.config.dayMaxTemp = Math.max(nextValue, device.config.dayMinTemp)
+  device.rules.dayMaxTemp = Math.max(nextValue, device.rules.dayMinTemp)
 }
 
 function updateNightMinTemp(value) {
   const nextValue = Number(value)
-  device.config.nightMinTemp = Math.min(nextValue, device.config.nightMaxTemp)
+  device.rules.nightMinTemp = Math.min(nextValue, device.rules.nightMaxTemp)
 }
 
 function updateNightMaxTemp(value) {
   const nextValue = Number(value)
-  device.config.nightMaxTemp = Math.max(nextValue, device.config.nightMinTemp)
+  device.rules.nightMaxTemp = Math.max(nextValue, device.rules.nightMinTemp)
 }
 
 function applyStatus(status) {
@@ -377,44 +402,93 @@ function applyStatus(status) {
   device.wifiConnected = Boolean(status.wifiConnected)
   device.timeSynced = Boolean(status.timeSynced)
   device.sensorReady = Boolean(status.sensorReady)
+  device.powerEnabled = status.powerEnabled !== false
+  device.manualOverride = Boolean(status.manualOverride)
   device.relays.dayHeat = Boolean(status.relays?.dayHeat)
   device.relays.nightHeat = Boolean(status.relays?.nightHeat)
   device.relays.uvb = Boolean(status.relays?.uvb)
+  device.relays.relay4 = Boolean(status.relays?.relay4)
 
-  if (status.config) {
-    applyConfig(status.config)
+  if (status.pins) {
+    applyPins(status.pins)
+  }
+
+  if (status.rules) {
+    applyRules(status.rules)
   }
 
   device.status = modeStatusText()
 }
 
-function applyConfig(config) {
-  device.config.dayStart = config.dayStart ?? device.config.dayStart
-  device.config.nightStart = config.nightStart ?? device.config.nightStart
-  device.config.dayMinTemp = Number(config.dayMinTemp ?? device.config.dayMinTemp)
-  device.config.dayMaxTemp = Number(config.dayMaxTemp ?? device.config.dayMaxTemp)
-  device.config.nightMinTemp = Number(config.nightMinTemp ?? device.config.nightMinTemp)
-  device.config.nightMaxTemp = Number(config.nightMaxTemp ?? device.config.nightMaxTemp)
+function applyPins(pins) {
+  device.pins.i2cSda = Number(pins.i2cSda ?? device.pins.i2cSda)
+  device.pins.i2cScl = Number(pins.i2cScl ?? device.pins.i2cScl)
+  device.pins.relayDayHeat = Number(pins.relayDayHeat ?? device.pins.relayDayHeat)
+  device.pins.relayNightHeat = Number(pins.relayNightHeat ?? device.pins.relayNightHeat)
+  device.pins.relayDayUvb = Number(pins.relayDayUvb ?? device.pins.relayDayUvb)
+  device.pins.relay4 = Number(pins.relay4 ?? device.pins.relay4)
+}
+
+function applyRules(rules) {
+  device.rules.dayStart = rules.dayStart ?? device.rules.dayStart
+  device.rules.nightStart = rules.nightStart ?? device.rules.nightStart
+  device.rules.dayMinTemp = Number(rules.dayMinTemp ?? device.rules.dayMinTemp)
+  device.rules.dayMaxTemp = Number(rules.dayMaxTemp ?? device.rules.dayMaxTemp)
+  device.rules.dayHeatRole = Number(rules.dayHeatRole ?? device.rules.dayHeatRole)
+  device.rules.dayNightHeatRole = Number(rules.dayNightHeatRole ?? device.rules.dayNightHeatRole)
+  device.rules.dayUvbRole = Number(rules.dayUvbRole ?? device.rules.dayUvbRole)
+  device.rules.dayReservedRole = Number(rules.dayReservedRole ?? device.rules.dayReservedRole)
+  device.rules.nightMinTemp = Number(rules.nightMinTemp ?? device.rules.nightMinTemp)
+  device.rules.nightMaxTemp = Number(rules.nightMaxTemp ?? device.rules.nightMaxTemp)
+  device.rules.nightHeatRole = Number(rules.nightHeatRole ?? device.rules.nightHeatRole)
+  device.rules.nightNightHeatRole = Number(rules.nightNightHeatRole ?? device.rules.nightNightHeatRole)
+  device.rules.nightUvbRole = Number(rules.nightUvbRole ?? device.rules.nightUvbRole)
+  device.rules.nightReservedRole = Number(rules.nightReservedRole ?? device.rules.nightReservedRole)
   lastSavedDayConfig = JSON.stringify([
-    device.config.dayStart,
-    device.config.dayMinTemp,
-    device.config.dayMaxTemp
+    device.rules.dayStart,
+    device.rules.dayMinTemp,
+    device.rules.dayMaxTemp,
+    device.rules.dayHeatRole,
+    device.rules.dayNightHeatRole,
+    device.rules.dayUvbRole,
+    device.rules.dayReservedRole
   ])
   lastSavedNightConfig = JSON.stringify([
-    device.config.nightStart,
-    device.config.nightMinTemp,
-    device.config.nightMaxTemp
+    device.rules.nightStart,
+    device.rules.nightMinTemp,
+    device.rules.nightMaxTemp,
+    device.rules.nightHeatRole,
+    device.rules.nightNightHeatRole,
+    device.rules.nightUvbRole,
+    device.rules.nightReservedRole
   ])
 }
 
-function buildConfigPayload() {
+function buildRulesPayload() {
   return {
-    dayStart: device.config.dayStart,
-    nightStart: device.config.nightStart,
-    dayMinTemp: Number(device.config.dayMinTemp),
-    dayMaxTemp: Number(device.config.dayMaxTemp),
-    nightMinTemp: Number(device.config.nightMinTemp),
-    nightMaxTemp: Number(device.config.nightMaxTemp)
+    dayStart: device.rules.dayStart,
+    nightStart: device.rules.nightStart,
+    dayMinTemp: Number(device.rules.dayMinTemp),
+    dayMaxTemp: Number(device.rules.dayMaxTemp),
+    dayHeatRole: Number(device.rules.dayHeatRole),
+    dayNightHeatRole: Number(device.rules.dayNightHeatRole),
+    dayUvbRole: Number(device.rules.dayUvbRole),
+    dayReservedRole: Number(device.rules.dayReservedRole),
+    nightMinTemp: Number(device.rules.nightMinTemp),
+    nightMaxTemp: Number(device.rules.nightMaxTemp),
+    nightHeatRole: Number(device.rules.nightHeatRole),
+    nightNightHeatRole: Number(device.rules.nightNightHeatRole),
+    nightUvbRole: Number(device.rules.nightUvbRole),
+    nightReservedRole: Number(device.rules.nightReservedRole)
+  }
+}
+
+function buildPinsPayload() {
+  return {
+    relayDayHeat: Number(device.pins.relayDayHeat),
+    relayNightHeat: Number(device.pins.relayNightHeat),
+    relayDayUvb: Number(device.pins.relayDayUvb),
+    relay4: Number(device.pins.relay4)
   }
 }
 
@@ -422,37 +496,25 @@ function saveBaseUrl() {
   setEsp32BaseUrl(baseUrl.value)
   syncState.value = 'idle'
   syncMessage.value = `已保存设备地址：${baseUrl.value}`
-}
-
-function updateMockMode() {
-  setMockMode(mockMode.value)
-  syncState.value = 'idle'
-  syncMessage.value = mockMode.value
-    ? '已切换到 Mock 模式，现在可以直接查看 UI 和交互。'
-    : '已切换到真实设备模式，可以尝试同步 ESP32。'
   syncFromEsp32()
 }
 
 async function syncFromEsp32() {
   busyAction.value = 'sync'
   syncState.value = 'loading'
-  syncMessage.value = mockMode.value
-    ? '正在读取 Mock 数据...'
-    : '正在读取 ESP32 状态和配置...'
+  syncMessage.value = '正在读取 ESP32 状态和配置...'
 
   try {
-    const [status, config] = await Promise.all([
-      mockMode.value ? fetchMockDeviceStatus() : fetchDeviceStatus(baseUrl.value),
-      mockMode.value ? fetchMockDeviceConfig() : fetchDeviceConfig(baseUrl.value)
+    const [status, rules] = await Promise.all([
+      fetchDeviceStatus(baseUrl.value),
+      fetchDeviceRules(baseUrl.value)
     ])
 
     applyStatus(status)
-    applyConfig(config)
+    applyRules(rules)
     device.status = modeStatusText()
     syncState.value = 'success'
-    syncMessage.value = mockMode.value
-      ? 'Mock 同步成功，当前界面显示的是演示数据。'
-      : '同步成功，当前界面已经连接到真实设备。'
+    syncMessage.value = '同步成功，当前界面已经连接到真实设备。'
   } catch (error) {
     syncState.value = 'error'
     syncMessage.value = `同步失败：${error.message}`
@@ -464,19 +526,15 @@ async function syncFromEsp32() {
 async function submitConfig() {
   busyAction.value = 'save'
   syncState.value = 'loading'
-  syncMessage.value = mockMode.value
-    ? '正在保存 Mock 配置...'
-    : '正在保存配置到 ESP32...'
+  syncMessage.value = '正在保存配置到 ESP32...'
 
   try {
-    const result = mockMode.value
-      ? await saveMockDeviceConfig(buildConfigPayload())
-      : await saveDeviceConfig(buildConfigPayload(), baseUrl.value)
-    if (result?.config) {
-      applyConfig(result.config)
+    const result = await saveDeviceRules(buildRulesPayload(), baseUrl.value)
+    if (result?.rules) {
+      applyRules(result.rules)
     }
     syncState.value = 'success'
-    syncMessage.value = mockMode.value ? 'Mock 配置已保存。' : '配置已保存到设备。'
+    syncMessage.value = '配置已保存到设备。'
     await syncFromEsp32()
   } catch (error) {
     syncState.value = 'error'
@@ -491,18 +549,12 @@ async function submitConfig() {
 async function restoreDefaults() {
   busyAction.value = 'reset'
   syncState.value = 'loading'
-  syncMessage.value = mockMode.value
-    ? '正在恢复 Mock 默认配置...'
-    : '正在恢复 ESP32 默认配置...'
+  syncMessage.value = '正在恢复 ESP32 默认配置...'
 
   try {
-    if (mockMode.value) {
-      await resetMockDeviceConfig()
-    } else {
-      await resetDeviceConfig(baseUrl.value)
-    }
+    await resetDeviceConfig(baseUrl.value)
     syncState.value = 'success'
-    syncMessage.value = mockMode.value ? 'Mock 默认配置已恢复。' : '默认配置已恢复。'
+    syncMessage.value = '默认配置已恢复。'
     await syncFromEsp32()
   } catch (error) {
     syncState.value = 'error'
@@ -518,13 +570,19 @@ async function autoSaveDayConfig() {
   daySaveState.value = 'saving'
 
   try {
-    const result = mockMode.value
-      ? await saveMockDeviceConfig(buildConfigPayload())
-      : await saveDeviceConfig(buildConfigPayload(), baseUrl.value)
-    if (result?.config) {
-      applyConfig(result.config)
+    const result = await saveDeviceRules(buildRulesPayload(), baseUrl.value)
+    if (result?.rules) {
+      applyRules(result.rules)
     } else {
-      lastSavedDayConfig = JSON.stringify([device.config.dayMinTemp, device.config.dayMaxTemp])
+      lastSavedDayConfig = JSON.stringify([
+        device.rules.dayStart,
+        device.rules.dayMinTemp,
+        device.rules.dayMaxTemp,
+        device.rules.dayHeatRole,
+        device.rules.dayNightHeatRole,
+        device.rules.dayUvbRole,
+        device.rules.dayReservedRole
+      ])
     }
     daySaveState.value = 'success'
   } catch {
@@ -536,21 +594,93 @@ async function autoSaveNightConfig() {
   nightSaveState.value = 'saving'
 
   try {
-    const result = mockMode.value
-      ? await saveMockDeviceConfig(buildConfigPayload())
-      : await saveDeviceConfig(buildConfigPayload(), baseUrl.value)
-    if (result?.config) {
-      applyConfig(result.config)
+    const result = await saveDeviceRules(buildRulesPayload(), baseUrl.value)
+    if (result?.rules) {
+      applyRules(result.rules)
     } else {
       lastSavedNightConfig = JSON.stringify([
-        device.config.nightStart,
-        device.config.nightMinTemp,
-        device.config.nightMaxTemp
+        device.rules.nightStart,
+        device.rules.nightMinTemp,
+        device.rules.nightMaxTemp,
+        device.rules.nightHeatRole,
+        device.rules.nightNightHeatRole,
+        device.rules.nightUvbRole,
+        device.rules.nightReservedRole
       ])
     }
     nightSaveState.value = 'success'
   } catch {
     nightSaveState.value = 'error'
+  }
+}
+
+async function togglePower() {
+  if (busyAction.value) {
+    return
+  }
+  busyAction.value = 'power'
+  try {
+    const next = !device.powerEnabled
+    await setDevicePower(next, baseUrl.value)
+    device.powerEnabled = next
+    device.manualOverride = false
+    syncState.value = 'success'
+    syncMessage.value = next ? '电源已开启。' : '电源已关闭，所有继电器已断开。'
+    await syncFromEsp32()
+  } catch (error) {
+    syncState.value = 'error'
+    syncMessage.value = `电源操作失败：${error.message}`
+  } finally {
+    if (busyAction.value === 'power') {
+      busyAction.value = ''
+    }
+  }
+}
+
+async function toggleRelay(relay) {
+  if (busyAction.value) {
+    return
+  }
+  busyAction.value = 'relay'
+  try {
+    const next = !device.relays[relay]
+    await toggleDeviceRelay(relay, next, baseUrl.value)
+    device.relays[relay] = next
+    device.manualOverride = true
+    syncMessage.value = `${relay} 已${next ? '开启' : '关闭'}（手动控制 60 秒）。`
+    await syncFromEsp32()
+  } catch (error) {
+    syncState.value = 'error'
+    syncMessage.value = `继电器操作失败：${error.message}`
+  } finally {
+    if (busyAction.value === 'relay') {
+      busyAction.value = ''
+    }
+  }
+}
+
+async function submitPins() {
+  if (busyAction.value) {
+    return
+  }
+  busyAction.value = 'pins'
+  syncState.value = 'loading'
+  syncMessage.value = '正在保存端口映射...'
+
+  try {
+    const result = await saveDevicePins(buildPinsPayload(), baseUrl.value)
+    if (result?.pins) {
+      applyPins(result.pins)
+    }
+    syncState.value = 'success'
+    syncMessage.value = '端口映射已保存。'
+  } catch (error) {
+    syncState.value = 'error'
+    syncMessage.value = `端口保存失败：${error.message}`
+  } finally {
+    if (busyAction.value === 'pins') {
+      busyAction.value = ''
+    }
   }
 }
 
@@ -583,16 +713,29 @@ onUnmounted(() => {
 })
 
 watch(
-  () => [device.config.dayStart, device.config.dayMinTemp, device.config.dayMaxTemp, activeTab.value],
-  ([dayStart, dayMinTemp, dayMaxTemp, currentTab]) => {
-    if (currentTab !== 'day') {
+  () => [
+    device.rules.dayStart,
+    device.rules.dayMinTemp,
+    device.rules.dayMaxTemp,
+    device.rules.dayHeatRole,
+    device.rules.dayNightHeatRole,
+    device.rules.dayUvbRole,
+    device.rules.dayReservedRole,
+    activeTab.value
+  ],
+  (values) => {
+    if (values[values.length - 1] !== 'day') {
       return
     }
 
     const currentConfig = JSON.stringify([
-      dayStart,
-      Number(dayMinTemp),
-      Number(dayMaxTemp)
+      device.rules.dayStart,
+      Number(device.rules.dayMinTemp),
+      Number(device.rules.dayMaxTemp),
+      Number(device.rules.dayHeatRole),
+      Number(device.rules.dayNightHeatRole),
+      Number(device.rules.dayUvbRole),
+      Number(device.rules.dayReservedRole)
     ])
     if (currentConfig === lastSavedDayConfig) {
       return
@@ -615,16 +758,29 @@ watch(
 )
 
 watch(
-  () => [device.config.nightStart, device.config.nightMinTemp, device.config.nightMaxTemp, activeTab.value],
-  ([nightStart, nightMinTemp, nightMaxTemp, currentTab]) => {
-    if (currentTab !== 'night') {
+  () => [
+    device.rules.nightStart,
+    device.rules.nightMinTemp,
+    device.rules.nightMaxTemp,
+    device.rules.nightHeatRole,
+    device.rules.nightNightHeatRole,
+    device.rules.nightUvbRole,
+    device.rules.nightReservedRole,
+    activeTab.value
+  ],
+  (values) => {
+    if (values[values.length - 1] !== 'night') {
       return
     }
 
     const currentConfig = JSON.stringify([
-      nightStart,
-      Number(nightMinTemp),
-      Number(nightMaxTemp)
+      device.rules.nightStart,
+      Number(device.rules.nightMinTemp),
+      Number(device.rules.nightMaxTemp),
+      Number(device.rules.nightHeatRole),
+      Number(device.rules.nightNightHeatRole),
+      Number(device.rules.nightUvbRole),
+      Number(device.rules.nightReservedRole)
     ])
     if (currentConfig === lastSavedNightConfig) {
       return
@@ -652,7 +808,7 @@ watch(
     <div class="phone-frame">
       <header class="topbar">
         <div class="brand-lockup">
-          <div class="brand-mark">馃崒</div>
+          <div class="brand-mark">☀</div>
           <div>
             <p class="brand-overline">smart climate</p>
             <h1>Sun Box</h1>
@@ -666,83 +822,76 @@ watch(
 
       <main class="content">
         <section v-if="activeTab === 'home'" class="screen home-screen">
-          <div class="hero-card">
-            <div class="hero-gradient"></div>
-            <div class="gauge-wrap">
-              <div class="gauge-ring" :style="gaugeArcStyle">
-                <div class="gauge-arc gauge-arc-temp"></div>
-                <div class="gauge-arc gauge-arc-humidity"></div>
-                <div class="gauge-needle gauge-needle-temp">
-                  <span class="gauge-needle-bar"></span>
-                </div>
-                <div class="gauge-needle gauge-needle-humidity">
-                  <span class="gauge-needle-bar"></span>
-                </div>
-                <div
-                  v-for="mark in tempGaugeMarks"
-                  :key="`temp-mark-${mark.id}`"
-                  class="gauge-mark gauge-mark-temp"
-                  :style="mark.style"
-                >
-                  <strong class="gauge-mark-value">{{ mark.valueLabel }}</strong>
-                </div>
-                <div
-                  v-for="mark in humidityGaugeMarks"
-                  :key="`humidity-mark-${mark.id}`"
-                  class="gauge-mark gauge-mark-humidity"
-                  :style="mark.style"
-                >
-                  <strong class="gauge-mark-value">{{ mark.valueLabel }}</strong>
-                </div>
-                <div class="gauge-center">
-                  <div class="gauge-value">
-                    {{ device.currentTemp.toFixed(1) }}<span>掳C</span> / {{ device.humidity.toFixed(0) }}<span>%</span>
+          <div class="panel home-panel">
+            <div class="panel-header">
+              <h2>设备概览</h2>
+            </div>
+
+            <div class="hero-card home-hero-card">
+              <div class="hero-gradient"></div>
+              <div class="gauge-wrap">
+                <div class="gauge-ring" :style="gaugeArcStyle">
+                  <div class="gauge-arc gauge-arc-track"></div>
+                  <div class="gauge-arc gauge-arc-temp"></div>
+                  <div class="gauge-needle gauge-needle-temp">
+                    <span class="gauge-needle-bar"></span>
                   </div>
-                  <div class="gauge-center-label">实时温湿度</div>
+                  <div class="gauge-center">
+                    <div class="gauge-center-eyebrow">实时温度</div>
+                    <div class="gauge-value">
+                      {{ device.currentTemp.toFixed(1) }}<span>°C</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div class="hero-footer">
-              <p>{{ dayModeLabel }}</p>
-            </div>
-          </div>
-
-          <div class="stack-card status-card status-grid-3 home-status-grid">
-            <div v-for="item in deviceIndicators" :key="item.label" class="status-tile">
-              <span class="eyebrow">{{ item.label }}</span>
-              <strong>{{ item.value }}</strong>
-            </div>
-          </div>
-
-          <div class="stack-card status-card status-grid-3 home-status-grid">
-            <div class="status-tile status-switch-tile">
-              <span class="eyebrow">鏃ラ棿鍔犳俯</span>
-              <div class="status-switch-row">
-                <strong>{{ device.relays.dayHeat ? '开启' : '关闭' }}</strong>
-                <label class="toggle-switch status-switch-display" aria-label="日间加温状态">
-                  <input :checked="device.relays.dayHeat" type="checkbox" disabled />
-                  <span class="toggle-slider"></span>
-                </label>
+              <div class="hero-footer">
+                <p>{{ device.status }}</p>
               </div>
             </div>
-            <div class="status-tile status-switch-tile">
-              <span class="eyebrow">澶滈棿鍔犳俯</span>
-              <div class="status-switch-row">
-                <strong>{{ device.relays.nightHeat ? '开启' : '关闭' }}</strong>
-                <label class="toggle-switch status-switch-display" aria-label="夜间加温状态">
-                  <input :checked="device.relays.nightHeat" type="checkbox" disabled />
-                  <span class="toggle-slider"></span>
-                </label>
+
+            <div class="stack-card status-card status-grid-3 home-status-grid home-indicator-grid">
+              <div v-for="item in deviceIndicators" :key="item.label" class="status-tile">
+                <span class="eyebrow">{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
               </div>
             </div>
-            <div class="status-tile status-switch-tile">
-              <span class="eyebrow">UVB</span>
-              <div class="status-switch-row">
-                <strong>{{ device.relays.uvb ? '开启' : '关闭' }}</strong>
-                <label class="toggle-switch status-switch-display" aria-label="UVB 状态">
-                  <input :checked="device.relays.uvb" type="checkbox" disabled />
-                  <span class="toggle-slider"></span>
-                </label>
+
+            <div class="stack-card home-power-card" :class="{ off: !device.powerEnabled }">
+              <div class="home-power-info">
+                <span class="eyebrow">总电源</span>
+                <strong>{{ device.powerEnabled ? '运行中' : '已关闭' }}</strong>
+                <small v-if="device.manualOverride">手动控制中，自动加温已暂停</small>
+                <small v-else>断开后所有继电器立即锁定</small>
+              </div>
+              <label class="toggle-switch" aria-label="总电源">
+                <input
+                  :checked="device.powerEnabled"
+                  type="checkbox"
+                  :disabled="busyAction !== ''"
+                  @change="togglePower"
+                />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div class="stack-card status-card status-grid-3 home-status-grid home-switch-grid">
+              <div
+                v-for="relay in homeRelays"
+                :key="`home-relay-${relay.key}`"
+                class="status-tile status-switch-tile"
+              >
+                <span class="eyebrow">{{ relay.label }}</span>
+                <div class="status-switch-row">
+                  <label class="toggle-switch status-switch-display" :aria-label="`${relay.label} 状态`">
+                    <input
+                      :checked="device.relays[relay.key]"
+                      type="checkbox"
+                      :disabled="!device.powerEnabled || busyAction !== ''"
+                      @change="toggleRelay(relay.key)"
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
               </div>
             </div>
           </div>
@@ -751,34 +900,34 @@ watch(
         <section v-else-if="activeTab === 'day'" class="screen">
           <div class="panel">
             <div class="panel-header">
-              <h2>鏃ラ棿璁剧疆</h2>
+              <h2>日间设置</h2>
               <div class="panel-header-meta">
                 <span class="autosave-badge" :class="daySaveState">{{ daySaveLabel }}</span>
-                <span class="panel-icon">鈽€</span>
+                <span class="panel-icon">☀</span>
               </div>
             </div>
 
             <div class="slider-card">
               <div class="slider-title">
-                <span>鏃堕棿绐楀彛</span>
+                <span>时间窗口</span>
                 <span>
-                  {{ formatHourLabel(device.config.dayStart) }} - {{ formatHourLabel(device.config.nightStart) }}
-                  路 {{ calculateWindowHours(device.config.dayStart, device.config.nightStart) }}灏忔椂
+                  {{ formatHourLabel(device.rules.dayStart) }} - {{ formatHourLabel(device.rules.nightStart) }}
+                  · {{ calculateWindowHours(device.rules.dayStart, device.rules.nightStart) }}小时
                 </span>
               </div>
               <div class="dual-range" :style="scheduleRangeStyle">
                 <div class="dual-range-track"></div>
                 <input
-                  :value="parseHour(device.config.dayStart)"
+                  :value="parseHour(device.rules.dayStart)"
                   type="range"
                   min="0"
                   max="23"
                   step="1"
                   class="range-thumb"
-                  @input="device.config.dayStart = hourToTime($event.target.value)"
+                  @input="device.rules.dayStart = hourToTime($event.target.value)"
                 />
                 <input
-                  :value="parseHour(device.config.nightStart)"
+                  :value="parseHour(device.rules.nightStart)"
                   type="range"
                   min="0"
                   max="23"
@@ -788,20 +937,20 @@ watch(
                 />
               </div>
               <div class="range-labels">
-                <span>鏃ラ棿寮€濮?{{ formatHourLabel(device.config.dayStart) }}</span>
-                <span>澶滈棿寮€濮?{{ formatHourLabel(device.config.nightStart) }}</span>
+                <span>日间开始 {{ formatHourLabel(device.rules.dayStart) }}</span>
+                <span>夜间开始 {{ formatHourLabel(device.rules.nightStart) }}</span>
               </div>
             </div>
 
             <div class="slider-card">
               <div class="slider-title">
-                <span>娓╁害鑼冨洿</span>
-                <span>{{ device.config.dayMinTemp.toFixed(1) }}掳C - {{ device.config.dayMaxTemp.toFixed(1) }}掳C</span>
+                <span>温度范围</span>
+                <span>{{ device.rules.dayMinTemp.toFixed(1) }}°C - {{ device.rules.dayMaxTemp.toFixed(1) }}°C</span>
               </div>
               <div class="dual-range" :style="dayRangeStyle">
                 <div class="dual-range-track"></div>
                 <input
-                  :value="device.config.dayMinTemp"
+                  :value="device.rules.dayMinTemp"
                   type="range"
                   min="18"
                   max="40"
@@ -810,7 +959,7 @@ watch(
                   @input="updateDayMinTemp($event.target.value)"
                 />
                 <input
-                  :value="device.config.dayMaxTemp"
+                  :value="device.rules.dayMaxTemp"
                   type="range"
                   min="18"
                   max="40"
@@ -820,62 +969,29 @@ watch(
                 />
               </div>
               <div class="range-labels">
-                <span>鏈€浣?{{ device.config.dayMinTemp.toFixed(1) }}掳C</span>
-                <span>鏈€楂?{{ device.config.dayMaxTemp.toFixed(1) }}掳C</span>
+                <span>最低 {{ device.rules.dayMinTemp.toFixed(1) }}°C</span>
+                <span>最高 {{ device.rules.dayMaxTemp.toFixed(1) }}°C</span>
               </div>
             </div>
 
-            <div class="device-mode-card">
+            <div
+              v-for="relay in relayList"
+              :key="`day-${relay.key}`"
+              class="device-mode-card"
+              :class="relay.accent"
+            >
               <div class="device-mode-header">
-                <span class="toggle-icon">☀</span>
-                <p>日间加温灯</p>
+                <span class="toggle-icon">{{ relay.icon }}</span>
+                <p>{{ relay.label }}</p>
               </div>
               <div class="mode-picker">
                 <button
                   v-for="option in relayModeOptions"
-                  :key="`day-${option.value}`"
+                  :key="`day-${relay.key}-${option.value}`"
                   type="button"
                   class="mode-option"
-                  :class="{ active: device.relayModes.dayHeat === option.value }"
-                  @click="device.relayModes.dayHeat = option.value"
-                >
-                  {{ option.label }}
-                </button>
-              </div>
-            </div>
-
-            <div class="device-mode-card muted">
-              <div class="device-mode-header">
-                <span class="toggle-icon">◌</span>
-                <p>UVB 灯</p>
-              </div>
-              <div class="mode-picker">
-                <button
-                  v-for="option in relayModeOptions"
-                  :key="`uvb-${option.value}`"
-                  type="button"
-                  class="mode-option"
-                  :class="{ active: device.relayModes.uvb === option.value }"
-                  @click="device.relayModes.uvb = option.value"
-                >
-                  {{ option.label }}
-                </button>
-              </div>
-            </div>
-
-            <div class="device-mode-card night-accent">
-              <div class="device-mode-header">
-                <span class="toggle-icon">☾</span>
-                <p>夜间加温灯</p>
-              </div>
-              <div class="mode-picker">
-                <button
-                  v-for="option in relayModeOptions"
-                  :key="`night-${option.value}`"
-                  type="button"
-                  class="mode-option"
-                  :class="{ active: device.relayModes.nightHeat === option.value }"
-                  @click="device.relayModes.nightHeat = option.value"
+                  :class="{ active: relayRoleMode('day', relay.key) === option.value }"
+                  @click="setRelayRoleMode('day', relay.key, option.value)"
                 >
                   {{ option.label }}
                 </button>
@@ -884,37 +1000,37 @@ watch(
           </div>
         </section>
 
-        <section v-else-if="activeTab === 'night'" class="screen night-theme">
-          <div class="panel dark-panel">
+        <section v-else-if="activeTab === 'night'" class="screen">
+          <div class="panel">
             <div class="panel-header">
-              <h2>澶滈棿璁剧疆</h2>
+              <h2>夜间设置</h2>
               <div class="panel-header-meta">
                 <span class="autosave-badge" :class="nightSaveState">{{ nightSaveLabel }}</span>
                 <span class="panel-icon">☾</span>
               </div>
             </div>
 
-            <div class="slider-card dark">
+            <div class="slider-card">
               <div class="slider-title">
-                <span>鏃堕棿绐楀彛</span>
+                <span>时间窗口</span>
                 <span>
-                  {{ formatHourLabel(device.config.nightStart) }} - {{ formatHourLabel(device.config.dayStart) }}
-                  路 {{ calculateWindowHours(device.config.nightStart, device.config.dayStart) }}灏忔椂
+                  {{ formatHourLabel(device.rules.nightStart) }} - {{ formatHourLabel(device.rules.dayStart) }}
+                  · {{ calculateWindowHours(device.rules.nightStart, device.rules.dayStart) }}小时
                 </span>
               </div>
               <div class="dual-range dual-range-reverse" :style="nightScheduleRangeStyle">
                 <div class="dual-range-track"></div>
                 <input
-                  :value="parseHour(device.config.nightStart)"
+                  :value="parseHour(device.rules.nightStart)"
                   type="range"
                   min="0"
                   max="23"
                   step="1"
                   class="range-thumb"
-                  @input="device.config.nightStart = hourToTime($event.target.value)"
+                  @input="device.rules.nightStart = hourToTime($event.target.value)"
                 />
                 <input
-                  :value="parseHour(device.config.dayStart)"
+                  :value="parseHour(device.rules.dayStart)"
                   type="range"
                   min="0"
                   max="23"
@@ -924,20 +1040,20 @@ watch(
                 />
               </div>
               <div class="range-labels">
-                <span>澶滈棿寮€濮?{{ formatHourLabel(device.config.nightStart) }}</span>
-                <span>鏃ラ棿寮€濮?{{ formatHourLabel(device.config.dayStart) }}</span>
+                <span>夜间开始 {{ formatHourLabel(device.rules.nightStart) }}</span>
+                <span>日间开始 {{ formatHourLabel(device.rules.dayStart) }}</span>
               </div>
             </div>
 
-            <div class="slider-card dark">
+            <div class="slider-card">
               <div class="slider-title">
-                <span>娓╁害鑼冨洿</span>
-                <span>{{ device.config.nightMinTemp.toFixed(1) }}掳C - {{ device.config.nightMaxTemp.toFixed(1) }}掳C</span>
+                <span>温度范围</span>
+                <span>{{ device.rules.nightMinTemp.toFixed(1) }}°C - {{ device.rules.nightMaxTemp.toFixed(1) }}°C</span>
               </div>
               <div class="dual-range" :style="nightRangeStyle">
                 <div class="dual-range-track"></div>
                 <input
-                  :value="device.config.nightMinTemp"
+                  :value="device.rules.nightMinTemp"
                   type="range"
                   min="15"
                   max="32"
@@ -946,7 +1062,7 @@ watch(
                   @input="updateNightMinTemp($event.target.value)"
                 />
                 <input
-                  :value="device.config.nightMaxTemp"
+                  :value="device.rules.nightMaxTemp"
                   type="range"
                   min="15"
                   max="32"
@@ -956,62 +1072,29 @@ watch(
                 />
               </div>
               <div class="range-labels">
-                <span>鏈€浣?{{ device.config.nightMinTemp.toFixed(1) }}掳C</span>
-                <span>鏈€楂?{{ device.config.nightMaxTemp.toFixed(1) }}掳C</span>
+                <span>最低 {{ device.rules.nightMinTemp.toFixed(1) }}°C</span>
+                <span>最高 {{ device.rules.nightMaxTemp.toFixed(1) }}°C</span>
               </div>
             </div>
 
-            <div class="device-mode-card dark-mode-card">
+            <div
+              v-for="relay in relayList"
+              :key="`night-${relay.key}`"
+              class="device-mode-card"
+              :class="relay.accent"
+            >
               <div class="device-mode-header">
-                <span class="toggle-icon">☀</span>
-                <p>日间加温灯</p>
+                <span class="toggle-icon">{{ relay.icon }}</span>
+                <p>{{ relay.label }}</p>
               </div>
               <div class="mode-picker">
                 <button
                   v-for="option in relayModeOptions"
-                  :key="`night-view-day-${option.value}`"
+                  :key="`night-${relay.key}-${option.value}`"
                   type="button"
-                  class="mode-option dark-option"
-                  :class="{ active: device.relayModes.dayHeat === option.value }"
-                  @click="device.relayModes.dayHeat = option.value"
-                >
-                  {{ option.label }}
-                </button>
-              </div>
-            </div>
-
-            <div class="device-mode-card dark-mode-card muted">
-              <div class="device-mode-header">
-                <span class="toggle-icon">◌</span>
-                <p>UVB 灯</p>
-              </div>
-              <div class="mode-picker">
-                <button
-                  v-for="option in relayModeOptions"
-                  :key="`night-view-uvb-${option.value}`"
-                  type="button"
-                  class="mode-option dark-option"
-                  :class="{ active: device.relayModes.uvb === option.value }"
-                  @click="device.relayModes.uvb = option.value"
-                >
-                  {{ option.label }}
-                </button>
-              </div>
-            </div>
-
-            <div class="device-mode-card dark-mode-card night-accent">
-              <div class="device-mode-header">
-                <span class="toggle-icon">☾</span>
-                <p>夜间加温灯</p>
-              </div>
-              <div class="mode-picker">
-                <button
-                  v-for="option in relayModeOptions"
-                  :key="`night-view-night-${option.value}`"
-                  type="button"
-                  class="mode-option dark-option"
-                  :class="{ active: device.relayModes.nightHeat === option.value }"
-                  @click="device.relayModes.nightHeat = option.value"
+                  class="mode-option"
+                  :class="{ active: relayRoleMode('night', relay.key) === option.value }"
+                  @click="setRelayRoleMode('night', relay.key, option.value)"
                 >
                   {{ option.label }}
                 </button>
@@ -1026,7 +1109,7 @@ watch(
               <div>
                 <span class="settings-overline">System</span>
                 <h2>系统设置</h2>
-                <p>管理设备接入、演示模式和当前连接状态。</p>
+                <p>管理设备接入、电源控制、端口映射和当前连接状态。</p>
               </div>
               <div class="settings-hero-badge" :data-state="syncState">
                 <span class="sync-dot"></span>
@@ -1039,82 +1122,99 @@ watch(
                 <div class="settings-panel-head">
                   <div>
                     <span class="section-kicker">Device</span>
-                    <h3>ESP32 鍦板潃</h3>
+                    <h3>ESP32 地址</h3>
                   </div>
-                  <span class="section-badge">{{ mockMode ? 'Mock' : 'Live' }}</span>
+                  <span class="section-badge">Live</span>
                 </div>
                 <p class="settings-panel-copy">
-                  淇濆瓨璁惧鍩虹鍦板潃锛岀湡瀹炴ā寮忎笅椤甸潰浼氳嚜鍔ㄨ鍙?                  <code>/api/status</code> 涓?<code>/api/config</code>銆?                </p>
+                  保存设备基础地址，页面会自动读取 <code>/api/status</code> 和 <code>/api/rules</code>。
+                </p>
                 <div class="input-row settings-input-row">
                   <input
                     id="baseUrl"
                     v-model="baseUrl"
                     type="text"
-                    placeholder="http://192.168.1.88"
+                    placeholder="留空使用当前域名（同源）"
                   />
-                  <button type="button" @click="saveBaseUrl">淇濆瓨</button>
+                  <button type="button" @click="saveBaseUrl">保存</button>
                 </div>
+              </article>
+
+              <article class="settings-panel">
+                <div class="settings-panel-head">
+                  <div>
+                    <span class="section-kicker">Power</span>
+                    <h3>总电源</h3>
+                  </div>
+                  <span class="section-badge" :class="device.powerEnabled ? '' : 'soft'">
+                    {{ device.powerEnabled ? 'On' : 'Off' }}
+                  </span>
+                </div>
+                <p class="settings-panel-copy">
+                  关闭后所有继电器立即断开并锁定；重新开启会恢复自动控制，并清除手动覆盖。
+                </p>
+                <label class="mode-toggle compact-toggle" aria-label="总电源">
+                  <span>
+                    <strong>{{ device.powerEnabled ? '已开启' : '已关闭' }}</strong>
+                    <small v-if="device.manualOverride">手动控制中，自动加温已暂停</small>
+                    <small v-else>切换设备全局电源</small>
+                  </span>
+                  <input
+                    :checked="device.powerEnabled"
+                    type="checkbox"
+                    :disabled="busyAction !== ''"
+                    @change="togglePower"
+                  />
+                </label>
               </article>
 
               <article class="settings-panel">
                 <div class="settings-panel-head">
                   <div>
                     <span class="section-kicker">Mapping</span>
-                    <h3>绔彛璁剧疆</h3>
+                    <h3>端口设置</h3>
                   </div>
-                  <span class="section-badge warm">IO</span>
+                  <span class="section-badge warm">GPIO</span>
                 </div>
                 <p class="settings-panel-copy">
-                  涓烘棩闂村姞鐑伅銆乁VB 鐏拰澶滈棿鍔犵儹鐏寚瀹氬搴旂殑鎺у埗绔彛銆?                </p>
-                <div class="port-settings-list">
-                  <label class="port-setting-row">
-                    <span>日间加热灯</span>
-                    <select v-model="device.relayPorts.dayHeat" class="port-select">
-                      <option v-for="port in relayPortOptions" :key="`day-port-${port}`" :value="port">
-                        {{ port }}
-                      </option>
-                    </select>
-                  </label>
-                  <label class="port-setting-row">
-                    <span>UVB 灯</span>
-                    <select v-model="device.relayPorts.uvb" class="port-select">
-                      <option v-for="port in relayPortOptions" :key="`uvb-port-${port}`" :value="port">
-                        {{ port }}
-                      </option>
-                    </select>
-                  </label>
-                  <label class="port-setting-row">
-                    <span>夜间加热灯</span>
-                    <select v-model="device.relayPorts.nightHeat" class="port-select">
-                      <option v-for="port in relayPortOptions" :key="`night-port-${port}`" :value="port">
-                        {{ port }}
-                      </option>
-                    </select>
-                  </label>
-                </div>
-              </article>
-
-              <article class="settings-panel">
-                <div class="settings-panel-head">
-                  <div>
-                    <span class="section-kicker">Preview</span>
-                    <h3>Mock 妯″紡</h3>
-                  </div>
-                  <span class="section-badge soft">{{ mockMode ? 'Enabled' : 'Disabled' }}</span>
-                </div>
-                <p class="settings-panel-copy">
-                  <template v-if="mockMode">
-                    褰撳墠浣跨敤婕旂ず鏁版嵁锛岄€傚悎鍏堟鏌?UI銆佷氦浜掑拰椤甸潰鑺傚銆?                  </template>
-                  <template v-else>
-                    褰撳墠宸插垏鍒扮湡瀹炶澶囨ā寮忥紝椤甸潰浼氭瘡 10 绉掕嚜鍔ㄥ悓姝ヤ竴娆¤澶囩姸鎬併€?                  </template>
+                  为四路继电器指定对应的 GPIO 引脚（可选 2–10，需互不相同），保存后立即生效。
                 </p>
-                <label class="mode-toggle compact-toggle" for="mockMode">
-                  <span>
-                    <strong>{{ mockMode ? '已开启' : '已关闭' }}</strong>
-                    <small>切换前端数据源</small>
-                  </span>
-                  <input id="mockMode" v-model="mockMode" type="checkbox" @change="updateMockMode" />
-                </label>
+                <div class="port-settings-list">
+                  <label
+                    v-for="item in pinRelayList"
+                    :key="`pin-${item.key}`"
+                    class="port-setting-row"
+                  >
+                    <span>{{ item.label }}</span>
+                    <select v-model="device.pins[item.key]" class="port-select">
+                      <option
+                        v-for="gpio in gpioOptions"
+                        :key="`pin-${item.key}-${gpio}`"
+                        :value="gpio"
+                      >
+                        IO{{ gpio }}
+                      </option>
+                    </select>
+                  </label>
+                </div>
+                <div class="action-row">
+                  <button
+                    type="button"
+                    class="primary-button"
+                    :disabled="busyAction !== ''"
+                    @click="submitPins"
+                  >
+                    保存端口映射
+                  </button>
+                  <button
+                    type="button"
+                    class="ghost-button"
+                    :disabled="busyAction !== ''"
+                    @click="restoreDefaults"
+                  >
+                    恢复默认规则
+                  </button>
+                </div>
               </article>
             </section>
 
@@ -1129,9 +1229,11 @@ watch(
                 </span>
               </div>
               <div class="status-pill-row">
+                <span class="status-pill" :class="{ active: device.powerEnabled }">电源</span>
                 <span class="status-pill" :class="{ active: device.wifiConnected }">Wi-Fi</span>
                 <span class="status-pill" :class="{ active: device.timeSynced }">NTP</span>
                 <span class="status-pill" :class="{ active: device.sensorReady }">Sensor</span>
+                <span class="status-pill" :class="{ active: device.manualOverride }">手动</span>
               </div>
               <p class="settings-panel-copy">{{ syncMessage }}</p>
             </section>

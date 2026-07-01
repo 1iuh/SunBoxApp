@@ -345,13 +345,24 @@ input[type='checkbox'] {
   padding: 20px 18px 24px;
 }
 
+.home-panel {
+  padding-bottom: 16px;
+}
+
+.home-hero-card {
+  margin-top: 4px;
+  background: rgba(255, 253, 247, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.58);
+}
+
 .hero-gradient {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.82), transparent 34%),
-    radial-gradient(circle at 72% 22%, rgba(255, 238, 184, 0.42), transparent 26%),
-    linear-gradient(180deg, #ffd76f 0%, #f6cb57 34%, #fbf4e6 100%);
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.74), transparent 34%),
+    radial-gradient(circle at 72% 20%, rgba(255, 226, 150, 0.18), transparent 24%),
+    linear-gradient(180deg, rgba(255, 248, 232, 0.96), rgba(250, 243, 225, 0.92));
 }
 
 .gauge-wrap,
@@ -372,20 +383,20 @@ input[type='checkbox'] {
   display: grid;
   place-items: center;
   position: relative;
-  background: radial-gradient(circle at center, rgba(255, 249, 236, 0.92) 49%, transparent 50%);
+  background: radial-gradient(circle at center, rgba(255, 249, 236, 0.92) 58%, transparent 59%);
 }
 
 .gauge-ring::before {
   content: '';
   position: absolute;
-  inset: 34px;
+  inset: 40px;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.78), transparent 42%),
-    linear-gradient(180deg, rgba(255, 252, 245, 0.98), rgba(252, 243, 220, 0.94));
+    radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.8), transparent 42%),
+    linear-gradient(180deg, rgba(255, 252, 245, 0.99), rgba(252, 244, 226, 0.96));
   box-shadow:
     inset 0 0 0 1px rgba(233, 198, 103, 0.26),
-    0 12px 26px rgba(201, 165, 70, 0.08);
+    0 16px 30px rgba(201, 165, 70, 0.1);
 }
 
 .gauge-arc {
@@ -394,39 +405,33 @@ input[type='checkbox'] {
   transform: rotate(0deg);
 }
 
+.gauge-arc-track {
+  inset: 0;
+  background:
+    conic-gradient(
+      from var(--gauge-start-angle),
+      rgba(238, 229, 211, 0.98) 0 var(--gauge-arc-deg),
+      transparent var(--gauge-arc-deg) 1turn
+    );
+  -webkit-mask: radial-gradient(circle, transparent 63%, #000 64% 71%, transparent 72%);
+  mask: radial-gradient(circle, transparent 63%, #000 64% 71%, transparent 72%);
+}
+
 .gauge-arc-temp {
   inset: 0;
   background:
     conic-gradient(
       from var(--gauge-start-angle),
-      #fffdfa 0deg,
-      #f9edd0 calc(var(--temp-arc-end-deg) * 0.32),
-      #f1cc84 calc(var(--temp-arc-end-deg) * 0.62),
-      #dd9432 var(--temp-arc-end-deg),
-      transparent var(--temp-arc-end-deg) 1turn
+      #f7cf67 0deg,
+      #f0b348 calc(var(--temp-progress-deg) * 0.72),
+      #e39a34 var(--temp-progress-deg),
+      transparent var(--temp-progress-deg) 1turn
     );
-  -webkit-mask: radial-gradient(circle, transparent 63%, #000 64% 72%, transparent 73%);
-  mask: radial-gradient(circle, transparent 63%, #000 64% 72%, transparent 73%);
+  -webkit-mask: radial-gradient(circle, transparent 63%, #000 64% 71%, transparent 72%);
+  mask: radial-gradient(circle, transparent 63%, #000 64% 71%, transparent 72%);
 }
 
 .gauge-arc-temp::before {
-  content: none;
-}
-
-.gauge-arc-humidity {
-  inset: 26px;
-  background:
-    conic-gradient(
-      from var(--gauge-start-angle),
-      #87c28d 0 var(--humidity-progress-deg),
-      rgba(221, 238, 219, 0.84) var(--humidity-progress-deg) var(--gauge-arc-deg),
-      transparent var(--gauge-arc-deg) 1turn
-    );
-  -webkit-mask: radial-gradient(circle, transparent 58%, #000 59% 66%, transparent 67%);
-  mask: radial-gradient(circle, transparent 58%, #000 59% 66%, transparent 67%);
-}
-
-.gauge-arc-humidity::before {
   content: none;
 }
 
@@ -444,12 +449,6 @@ input[type='checkbox'] {
   transform: translate(-50%, -50%) rotate(var(--temp-needle-angle));
 }
 
-.gauge-needle-humidity {
-  width: 0;
-  height: 0;
-  transform: translate(-50%, -50%) rotate(var(--humidity-needle-angle));
-}
-
 .gauge-needle-bar {
   position: absolute;
   left: 50%;
@@ -460,90 +459,60 @@ input[type='checkbox'] {
 }
 
 .gauge-needle-temp .gauge-needle-bar {
-  width: 5px;
-  height: 34px;
-  bottom: 90px;
-  background: linear-gradient(180deg, #fffefb, #e2a042);
-  box-shadow: 0 4px 10px rgba(124, 90, 21, 0.18);
-}
-
-.gauge-needle-humidity .gauge-needle-bar {
-  width: 4px;
-  height: 28px;
-  bottom: 60px;
-  background: linear-gradient(180deg, #f7fff7, #89bf8d);
-  box-shadow: 0 4px 10px rgba(72, 120, 74, 0.16);
+  width: 18px;
+  height: 18px;
+  bottom: 92px;
+  border-radius: 50%;
+  background: #fffdf7;
+  border: 4px solid #efb24a;
+  box-shadow: 0 6px 14px rgba(145, 105, 30, 0.18);
 }
 
 .gauge-center {
   position: relative;
   z-index: 2;
   text-align: center;
-  margin-top: 18px;
+  margin-top: 4px;
+}
+
+.gauge-center-eyebrow {
+  margin-bottom: 8px;
+  color: #635445;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .gauge-value {
   margin-top: 2px;
-  font-size: 30px;
-  line-height: 1.15;
+  font-size: 38px;
+  line-height: 1;
   font-weight: 800;
-  color: #2b2015;
+  color: #20160f;
 }
 
 .gauge-value span {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
-}
-
-.gauge-center-label {
-  margin-top: 8px;
-  color: #8a7760;
-  font-size: 13px;
-}
-
-.gauge-mark {
-  position: absolute;
-  z-index: 4;
-  display: grid;
-  justify-items: center;
-  min-width: 52px;
-  text-align: center;
-  line-height: 1.1;
-  pointer-events: none;
-}
-
-.gauge-mark-value {
-  color: #2d2418;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.gauge-mark-temp {
-  min-width: 0;
-}
-
-.gauge-mark-temp .gauge-mark-value {
-  color: #77501a;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.gauge-mark-humidity {
-  min-width: 36px;
-}
-
-.gauge-mark-humidity .gauge-mark-value {
-  color: rgba(77, 123, 79, 0.88);
-  font-size: 11px;
 }
 
 .hero-footer {
   text-align: center;
-  margin-top: 2px;
+  margin-top: 16px;
 }
 
 .hero-footer p {
-  margin: 4px 0;
+  margin: 0;
+  color: #3b2d1e;
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 700;
+}
+
+.hero-footer p + p {
+  margin-top: 4px;
+  color: #5f5142;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .status-card,
@@ -565,17 +534,20 @@ input[type='checkbox'] {
 }
 
 .home-status-grid {
+  margin-top: 12px;
   gap: 10px;
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  box-shadow: 0 14px 34px rgba(156, 131, 83, 0.08);
 }
 
 .status-tile {
   min-width: 0;
   padding: 14px 12px;
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(255, 251, 241, 0.96), rgba(248, 240, 220, 0.88));
-  border: 1px solid rgba(239, 226, 192, 0.9);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  background: rgba(255, 253, 247, 0.9);
+  border: 1px solid rgba(238, 231, 214, 0.88);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.52);
 }
 
 .eyebrow,
@@ -604,19 +576,27 @@ input[type='checkbox'] {
 
 .status-switch-tile {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  justify-items: center;
+  text-align: center;
 }
 
 .status-switch-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  justify-items: center;
   gap: 10px;
+  width: 100%;
+}
+
+.status-switch-row strong {
+  min-width: 0;
+  word-break: keep-all;
+  white-space: nowrap;
 }
 
 .status-switch-display {
   transform: scale(0.92);
-  transform-origin: right center;
+  transform-origin: center center;
 }
 
 .status-switch-display input {
@@ -624,11 +604,73 @@ input[type='checkbox'] {
 }
 
 .status-switch-display .toggle-slider {
-  background: rgba(196, 189, 177, 0.72);
+  background: rgba(201, 194, 182, 0.68);
 }
 
 .status-switch-display input:checked + .toggle-slider {
-  background: linear-gradient(180deg, #ffd86b, #eeae38);
+  background: linear-gradient(180deg, #ffd56a, #efb23e);
+}
+
+.home-screen .panel-header {
+  margin-bottom: 10px;
+}
+
+.home-screen .panel-header h2 {
+  font-size: 30px;
+}
+
+.home-screen .panel-header-meta {
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.home-screen .status-grid-3 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.home-switch-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.home-switch-grid .status-tile {
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+
+.home-switch-grid .eyebrow {
+  margin-bottom: 0;
+}
+
+.home-power-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+  margin-top: 12px;
+  border-radius: 24px;
+  background: linear-gradient(160deg, rgba(255, 244, 214, 0.92), rgba(255, 252, 244, 0.92));
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow: 0 14px 34px rgba(156, 131, 83, 0.1);
+}
+
+.home-power-card.off {
+  background: linear-gradient(160deg, rgba(255, 232, 232, 0.92), rgba(255, 246, 246, 0.92));
+}
+
+.home-power-info {
+  display: grid;
+  gap: 4px;
+}
+
+.home-power-info strong {
+  font-size: 18px;
+}
+
+.home-power-info small {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .mono {
@@ -949,12 +991,6 @@ input[type='checkbox'] {
   margin-top: 0;
 }
 
-.slider-card.night,
-.slider-card.dark,
-.toggle-card.dark {
-  background: rgba(20, 40, 54, 0.66);
-}
-
 .slider-title {
   display: flex;
   justify-content: space-between;
@@ -998,19 +1034,6 @@ input[type='checkbox'] {
   background: rgba(30, 56, 79, 0.14);
 }
 
-.dark-mode-card {
-  background: rgba(20, 40, 54, 0.66);
-  color: #f7f8f9;
-}
-
-.dark-mode-card .device-mode-header p {
-  color: #f7f8f9;
-}
-
-.dark-mode-card .toggle-icon {
-  background: rgba(255, 221, 113, 0.12);
-}
-
 .device-mode-header {
   display: flex;
   align-items: center;
@@ -1043,16 +1066,6 @@ input[type='checkbox'] {
   background: linear-gradient(180deg, #ffd75a, #efba2d);
   color: #332000;
   box-shadow: 0 8px 18px rgba(239, 186, 45, 0.2);
-}
-
-.dark-option {
-  background: rgba(240, 244, 246, 0.1);
-  color: #d6e0e4;
-}
-
-.dark-option.active {
-  background: linear-gradient(180deg, #ffe084, #f1be38);
-  color: #332000;
 }
 
 .toggle-switch {
@@ -1141,28 +1154,6 @@ input[type='checkbox'] {
   background: rgba(195, 195, 195, 0.18);
 }
 
-.night-theme .dark-panel {
-  background:
-    radial-gradient(circle at top right, rgba(72, 118, 150, 0.22), transparent 30%),
-    linear-gradient(180deg, #142b39, #0d202c);
-  color: #f7f8f9;
-}
-
-.night-theme .slider-title,
-.night-theme .toggle-card small,
-.night-theme .panel-icon {
-  color: #d4dde2;
-}
-
-.night-theme .primary-button {
-  background: linear-gradient(180deg, #ffe084, #f1be38);
-}
-
-.night-theme .ghost-button {
-  background: rgba(235, 241, 244, 0.14);
-  color: #f0f5f7;
-}
-
 .bottom-nav {
   position: absolute;
   left: 0;
@@ -1221,6 +1212,14 @@ input[type='checkbox'] {
 
   .gauge-value {
     font-size: 26px;
+  }
+
+  .home-screen .status-grid-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .home-switch-grid {
+    grid-template-columns: 1fr;
   }
 
   .status-grid-3 {
