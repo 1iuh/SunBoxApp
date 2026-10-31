@@ -24,6 +24,11 @@ const activeTab = ref('home')
 // 请求出错（或按钮操作完成）时在底部弹出的短提示
 const toast = ref(null)
 let toastTimer = null
+// 页面不定时轮询；以下两个时机自动回读一次，避免显示过时的状态
+let lastSyncAt = 0
+let overrideRefreshTimer = null
+const MANUAL_OVERRIDE_MS = 60000
+const STALE_AFTER_MS = 30000
 const busyAction = ref('')
 const daySaveState = ref('idle')
 const nightSaveState = ref('idle')
@@ -412,6 +417,14 @@ function applyStatus(status) {
   device.sensorReady = Boolean(status.sensorReady)
   device.powerEnabled = status.powerEnabled !== false
   device.manualOverride = Boolean(status.manualOverride)
+  // 手动保持期结束后设备会恢复温控，到时回读一次，否则页面会一直停在手动状态
+  if (device.manualOverride && !overrideRefreshTimer) {
+    overrideRefreshTimer = window.setTimeout(() => {
+      overrideRefreshTimer = null
+      refreshStatusQuietly()
+    }, MANUAL_OVERRIDE_MS + 1000)
+  }
+  lastSyncAt = Date.now()
   device.relays.dayHeat = Boolean(status.relays?.dayHeat)
   device.relays.nightHeat = Boolean(status.relays?.nightHeat)
   device.relays.uvb = Boolean(status.relays?.uvb)
@@ -549,6 +562,16 @@ async function restoreDefaults() {
   }
 }
 
+// 后台回读一次状态（例如规则保存后设备已重新计算继电器）。
+// 不走 syncFromEsp32：它会占用 busyAction，期间用户继续拖动滑块的修改会被跳过保存。
+async function refreshStatusQuietly() {
+  try {
+    applyStatus(await fetchDeviceStatus())
+  } catch {
+    // 回读失败不提示，下次刷新页面即可
+  }
+}
+
 async function autoSaveDayConfig() {
   daySaveState.value = 'saving'
 
@@ -568,6 +591,7 @@ async function autoSaveDayConfig() {
       ])
     }
     daySaveState.value = 'success'
+    refreshStatusQuietly()
   } catch (error) {
     daySaveState.value = 'error'
     showToast(`日间设置保存失败：${error.message}`)
@@ -593,6 +617,7 @@ async function autoSaveNightConfig() {
       ])
     }
     nightSaveState.value = 'success'
+    refreshStatusQuietly()
   } catch (error) {
     nightSaveState.value = 'error'
     showToast(`夜间设置保存失败：${error.message}`)
@@ -629,6 +654,9 @@ async function toggleRelay(relay) {
     await toggleDeviceRelay(relay, next)
     device.relays[relay] = next
     device.manualOverride = true
+    // 每次手动切换都会让设备的 60 秒保持期重新计时
+    window.clearTimeout(overrideRefreshTimer)
+    overrideRefreshTimer = null
     await syncFromEsp32()
   } catch (error) {
     showToast(`继电器操作失败：${error.message}`)
@@ -710,12 +738,22 @@ const deviceInfoRows = computed(() => [
   }
 ])
 
-// 只在打开页面时读取一次；之后靠操作后的回读或用户刷新页面更新
+// 手机锁屏或切到别的 App 再回来时，页面还停在离开时的数据
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible' && Date.now() - lastSyncAt > STALE_AFTER_MS && !busyAction.value) {
+    syncFromEsp32()
+  }
+}
+
+// 打开页面时读取一次；之后靠操作后的回读、回到前台或用户刷新页面更新
 onMounted(() => {
   syncFromEsp32()
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  window.clearTimeout(overrideRefreshTimer)
   if (daySaveTimer) {
     window.clearTimeout(daySaveTimer)
   }
