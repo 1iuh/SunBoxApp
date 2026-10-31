@@ -16,6 +16,8 @@ SunBox 是一个为爬宠（蜥蜴、守宫等）饲养箱设计的轻量温控 
 - 🌡️ **实时温度表盘**：CSS 绘制的弧形仪表，直观展示当前温度与目标区间
 - 🔌 **四路继电器控制**：加温灯、UVB 灯、夜间加温、备用继电器，逐路配置角色（常亮 / 常闭 / 滞回加温）
 - 📌 **GPIO 引脚映射**：在面板上直接配置继电器到 GPIO 的对应关系
+- 📈 **温湿度历史**：24 小时 / 7 天 / 长期曲线，标出加温灯开启时段，显示最低/平均/最高，可导出 CSV
+- 🛠️ **设备信息**：固件版本、WiFi、存储用量，一键打开设备的升级页和配网页
 - 💾 **自动保存**：调整日间/夜间参数后自动防抖提交到设备，无需手动点保存
 - 📱 **PWA 就绪**：可"添加到主屏幕"，像原生 App 一样全屏运行
 - 📦 **构建预压缩**：`npm run build` 同时输出 `.gz`，传输体积直降 60%+
@@ -27,7 +29,7 @@ SunBox 是一个为爬宠（蜥蜴、守宫等）饲养箱设计的轻量温控 
 | **框架** | [Vue 3](https://vuejs.org/) `<script setup>` + 响应式状态 |
 | **构建** | [Vite 6](https://vitejs.dev/) · 生产构建预压缩 gzip |
 | **样式** | 原生 CSS（CSS 变量 + conic-gradient 表盘） |
-| **运行时** | 零额外运行时依赖，仅 `vue` 一个生产依赖 |
+| **运行时** | 零额外运行时依赖，仅 `vue` 一个生产依赖（曲线图为手写 SVG） |
 | **PWA** | Web App Manifest + 可安装 |
 
 ## 快速开始
@@ -41,10 +43,11 @@ SunBox 是一个为爬宠（蜥蜴、守宫等）饲养箱设计的轻量温控 
 
 ```bash
 npm install
-npm run dev
+# 把 /api、/update、/wifi 转发到真实设备（PowerShell 用 $env:SUNBOX_DEVICE="http://192.168.31.125"; npm run dev）
+SUNBOX_DEVICE=http://192.168.31.125 npm run dev
 ```
 
-开发服务默认监听 `http://localhost:5173`，局域网内设备可用 `http://你的电脑IP:5173` 访问。
+开发服务默认监听 `http://localhost:5173`，局域网内设备可用 `http://你的电脑IP:5173` 访问。不设 `SUNBOX_DEVICE` 时接口请求会失败。
 
 ### 生产构建
 
@@ -64,19 +67,29 @@ dist/
     └── index-xxxx.js    (+ .js.gz)
 ```
 
-> 默认启用 gzip 预压缩（`vite-plugin-compression`），原文件保留。若你的静态服务器支持发送预压缩内容，传输体积可从 ~108 kB 降至 ~37 kB。
+> 默认启用 gzip 预压缩（`vite-plugin-compression`），原文件保留。所有文件（包括图标和 manifest）都会生成 `.gz`，因为 SunBox 固件只托管 `*.gz`。
 
-把 `dist/` 部署到任意静态服务器（NAS、路由器、ESP32 本机的 LittleFS 等）即可。
+### 部署到 SunBox 设备
+
+```bash
+npm run export:firmware
+```
+
+这条命令会先构建，再把 `dist/**/*.gz` 复制到固件仓库的 `web/` 目录：
+
+- 默认目标是 `../SunBox/web`，可以用环境变量 `SUNBOX_WEB_DIR` 改成别的目录。
+- 复制前会先删掉目标目录里旧的 `*.gz`，其他文件不动。
+
+复制完之后，二选一：
+
+- **不重新烧录**：浏览器打开 `http://<设备IP>/update`，选择 `SunBox/web` 文件夹上传。
+- **内置进固件**：在固件仓库运行 `powershell tools/gen_web_assets.ps1`，然后重新编译烧录。
 
 ## ESP32 对接约定
 
-### 默认地址
+### 请求地址
 
-**默认使用与页面相同的域（同源）**。当面板与 ESP32 固件由同一台 HTTP 服务托管时（例如直接刷进 ESP32 的 LittleFS），无需任何配置即可工作。
-
-若面板部署在其他主机，可在「系统」标签页填入 ESP32 地址（如 `http://192.168.31.125`），设置会写入 Cookie。
-
-> ⚠️ 推荐用 `http` 访问面板，避免公网 `https` 页面请求内网 `http` 设备时触发的混合内容限制。
+面板由 ESP32 自己托管，所有请求都是同源的相对路径（`/api/...`），不需要配置设备地址。
 
 ### HTTP API
 
@@ -90,8 +103,11 @@ dist/
 | `POST` | `/api/relays` | 手动切换单路继电器（60 秒手动覆盖） |
 | `GET` | `/api/pins` | 读取继电器到 GPIO 的映射 |
 | `POST` | `/api/pins` | 更新引脚映射 |
+| `GET` | `/api/history` | 温湿度历史（最近 7 天每 10 分钟 + 更早每天 4 条） |
+| `POST` | `/api/history/clear` | 清空历史记录 |
+| `GET` | `/api/status` 内的 `firmware` / `wifi` / `webui` / `history` | 设备信息（系统页展示） |
 
-完整字段定义见 [API.md](./API.md)。
+完整字段定义见 [API.md](./API.md)。它是从固件仓库 `SunBox/API.md` 复制过来的，两者不一致时以固件仓库为准。
 
 ### 继电器角色
 
@@ -111,6 +127,8 @@ dist/
 SunBoxApp/
 ├── index.html              # HTML 入口（PWA meta）
 ├── vite.config.js          # Vite 配置 + gzip 预压缩
+├── scripts/
+│   └── export-to-firmware.mjs  # 把 dist/*.gz 复制到固件仓库 web/
 ├── API.md                  # ESP32 HTTP API 完整文档
 ├── public/
 │   ├── manifest.webmanifest
@@ -118,10 +136,14 @@ SunBoxApp/
 │   └── icon-maskable.svg
 └── src/
     ├── main.js             # 应用入口
-    ├── App.vue             # 主面板（4 个标签页 + 状态管理）
+    ├── App.vue             # 主面板（5 个标签页 + 状态管理）
+    ├── components/
+    │   ├── HistoryPanel.vue    # 「记录」页：范围切换、统计、导出
+    │   └── HistoryChart.vue    # SVG 曲线图（加温时段、触摸查看数值）
     ├── style.css           # 全局样式与表盘
     └── lib/
-        └── esp32.js        # ESP32 HTTP API 封装（fetch）
+        ├── esp32.js        # ESP32 HTTP API 封装（fetch）
+        └── history.js      # 历史数据处理纯函数（范围筛选、断线、刻度、CSV）
 ```
 
 ## 工作原理
@@ -133,7 +155,7 @@ SunBoxApp/
 └─────────────┘    JSON 状态/规则    └──────────┘           └────────────┘
 ```
 
-面板每 10 秒自动轮询 `/api/status` 刷新表盘；调整参数后防抖 700ms 自动 `POST /api/rules`，无需手动保存。
+面板只在打开页面和每次操作后读取 `/api/status`（不定时轮询，刷新页面即可更新）；调整参数后防抖 700ms 自动 `POST /api/rules`，无需手动保存。
 
 ## 开发说明
 

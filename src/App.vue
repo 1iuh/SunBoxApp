@@ -8,21 +8,22 @@ import {
   setDevicePower,
   toggleDeviceRelay,
   saveDevicePins,
-  getEsp32BaseUrl,
-  setEsp32BaseUrl
+  clearDeviceHistory
 } from './lib/esp32'
+import HistoryPanel from './components/HistoryPanel.vue'
 
 const tabs = [
   { key: 'home', label: '首页', icon: '◌' },
   { key: 'day', label: '日间', icon: '☀' },
   { key: 'night', label: '夜间', icon: '☾' },
+  { key: 'history', label: '记录', icon: '∿' },
   { key: 'settings', label: '系统', icon: '⚙' }
 ]
 
 const activeTab = ref('home')
-const baseUrl = ref(getEsp32BaseUrl())
-const syncState = ref('idle')
-const syncMessage = ref('配置好设备地址后即可同步 ESP32 状态与配置。')
+// 请求出错（或按钮操作完成）时在底部弹出的短提示
+const toast = ref(null)
+let toastTimer = null
 const busyAction = ref('')
 const daySaveState = ref('idle')
 const nightSaveState = ref('idle')
@@ -30,11 +31,19 @@ let daySaveTimer = null
 let nightSaveTimer = null
 let lastSavedDayConfig = ''
 let lastSavedNightConfig = ''
-let syncTimer = null
+
+// 设备附带信息（固件 / WiFi / 存储 / 历史），只读展示
+const deviceInfo = reactive({
+  firmware: { version: '', buildTime: '', pendingVerify: false, lastResult: '' },
+  wifi: { ssid: '', ip: '', rssi: null, apActive: false, apSsid: '' },
+  webui: { source: '', fsReady: false, fsTotalBytes: 0, fsUsedBytes: 0 },
+  history: { recording: false, recentCount: 0, archiveCount: 0 }
+})
 
 const device = reactive({
-  currentTemp: 0,
-  humidity: 0,
+  // null = 传感器暂无读数（固件返回 null）
+  currentTemp: null,
+  humidity: null,
   mode: 'day',
   status: '状态：等待同步',
   wifiConnected: false,
@@ -136,8 +145,10 @@ function setRelayRoleMode(mode, relay, modeValue) {
 
 function getTempGaugeGeometry() {
   const gaugeArcDeg = 280
-  const dayMin = Number(device.rules.dayMinTemp)
-  const dayMax = Number(device.rules.dayMaxTemp)
+  // 表盘的目标区间跟随当前模式
+  const isNight = device.mode === 'night'
+  const dayMin = Number(isNight ? device.rules.nightMinTemp : device.rules.dayMinTemp)
+  const dayMax = Number(isNight ? device.rules.nightMaxTemp : device.rules.dayMaxTemp)
   const lowBound = dayMin - 5
   const highBound = dayMax + 5
   const totalRange = Math.max(1, highBound - lowBound)
@@ -177,7 +188,8 @@ const gaugeArcStyle = computed(() => {
     midDeg,
     highDeg
   } = getTempGaugeGeometry()
-  const safeTemp = Math.min(highBound, Math.max(lowBound, Number(device.currentTemp)))
+  const temp = device.currentTemp ?? lowBound
+  const safeTemp = Math.min(highBound, Math.max(lowBound, Number(temp)))
   const tempCurrentDeg = ((safeTemp - lowBound) / totalRange) * gaugeArcDeg
 
   return {
@@ -193,25 +205,14 @@ const dayModeLabel = computed(() => {
   return device.mode === 'night' ? '夜间模式 (Night Mode)' : '日间模式 (Day Mode)'
 })
 
+const tempText = computed(() => (device.currentTemp == null ? '--' : device.currentTemp.toFixed(1)))
+
 const deviceIndicators = computed(() => [
-  { label: '湿度', value: `${device.humidity.toFixed(0)}%` },
+  { label: '湿度', value: device.humidity == null ? '--' : `${device.humidity.toFixed(0)}%` },
   { label: 'Wi-Fi', value: device.wifiConnected ? '已连接' : '未连接' },
   { label: '时钟', value: device.timeSynced ? '已同步' : '未同步' },
   { label: '传感器', value: device.sensorReady ? '正常' : '异常' }
 ])
-
-const topSyncLabel = computed(() => {
-  if (syncState.value === 'loading') {
-    return '同步中...'
-  }
-  if (syncState.value === 'error') {
-    return '同步失败'
-  }
-  if (syncState.value === 'success') {
-    return '已连接'
-  }
-  return '待同步'
-})
 
 const daySaveLabel = computed(() => {
   if (daySaveState.value === 'saving') {
@@ -335,6 +336,10 @@ function modeStatusText() {
     return '状态：传感器未就绪'
   }
 
+  if (device.currentTemp == null) {
+    return '状态：传感器暂无读数，加温已关闭'
+  }
+
   if (device.mode === 'night') {
     return device.relays.nightHeat ? '状态：夜间加温中' : '状态：夜间待机'
   }
@@ -395,9 +400,20 @@ function updateNightMaxTemp(value) {
   device.rules.nightMaxTemp = Math.max(nextValue, device.rules.nightMinTemp)
 }
 
+function hasPendingRuleEdit() {
+  return daySaveState.value === 'saving' || nightSaveState.value === 'saving'
+}
+
+function applyDeviceInfo(status) {
+  Object.assign(deviceInfo.firmware, status.firmware ?? {})
+  Object.assign(deviceInfo.wifi, status.wifi ?? {})
+  Object.assign(deviceInfo.webui, status.webui ?? {})
+  Object.assign(deviceInfo.history, status.history ?? {})
+}
+
 function applyStatus(status) {
-  device.currentTemp = status.temperatureC ?? 0
-  device.humidity = status.humidity ?? 0
+  device.currentTemp = status.temperatureC ?? null
+  device.humidity = status.humidity ?? null
   device.mode = status.mode ?? 'day'
   device.wifiConnected = Boolean(status.wifiConnected)
   device.timeSynced = Boolean(status.timeSynced)
@@ -413,10 +429,12 @@ function applyStatus(status) {
     applyPins(status.pins)
   }
 
-  if (status.rules) {
+  // 用户正在调参数（防抖保存未完成）时不用设备上的旧值覆盖界面
+  if (status.rules && !hasPendingRuleEdit()) {
     applyRules(status.rules)
   }
 
+  applyDeviceInfo(status)
   device.status = modeStatusText()
 }
 
@@ -492,73 +510,46 @@ function buildPinsPayload() {
   }
 }
 
-function saveBaseUrl() {
-  setEsp32BaseUrl(baseUrl.value)
-  syncState.value = 'idle'
-  syncMessage.value = `已保存设备地址：${baseUrl.value}`
-  syncFromEsp32()
+function showToast(message, type = 'error') {
+  toast.value = { message, type }
+  if (toastTimer) {
+    window.clearTimeout(toastTimer)
+  }
+  toastTimer = window.setTimeout(() => {
+    toast.value = null
+  }, type === 'error' ? 5000 : 2500)
 }
 
 async function syncFromEsp32() {
   busyAction.value = 'sync'
-  syncState.value = 'loading'
-  syncMessage.value = '正在读取 ESP32 状态和配置...'
 
   try {
     const [status, rules] = await Promise.all([
-      fetchDeviceStatus(baseUrl.value),
-      fetchDeviceRules(baseUrl.value)
+      fetchDeviceStatus(),
+      fetchDeviceRules()
     ])
 
     applyStatus(status)
-    applyRules(rules)
+    if (!hasPendingRuleEdit()) {
+      applyRules(rules)
+    }
     device.status = modeStatusText()
-    syncState.value = 'success'
-    syncMessage.value = '同步成功，当前界面已经连接到真实设备。'
   } catch (error) {
-    syncState.value = 'error'
-    syncMessage.value = `同步失败：${error.message}`
+    showToast(`读取设备状态失败：${error.message}`)
   } finally {
     busyAction.value = ''
   }
 }
 
-async function submitConfig() {
-  busyAction.value = 'save'
-  syncState.value = 'loading'
-  syncMessage.value = '正在保存配置到 ESP32...'
-
-  try {
-    const result = await saveDeviceRules(buildRulesPayload(), baseUrl.value)
-    if (result?.rules) {
-      applyRules(result.rules)
-    }
-    syncState.value = 'success'
-    syncMessage.value = '配置已保存到设备。'
-    await syncFromEsp32()
-  } catch (error) {
-    syncState.value = 'error'
-    syncMessage.value = `保存失败：${error.message}`
-  } finally {
-    if (busyAction.value === 'save') {
-      busyAction.value = ''
-    }
-  }
-}
-
 async function restoreDefaults() {
   busyAction.value = 'reset'
-  syncState.value = 'loading'
-  syncMessage.value = '正在恢复 ESP32 默认配置...'
 
   try {
-    await resetDeviceConfig(baseUrl.value)
-    syncState.value = 'success'
-    syncMessage.value = '默认配置已恢复。'
+    await resetDeviceConfig()
+    showToast('已恢复默认规则', 'success')
     await syncFromEsp32()
   } catch (error) {
-    syncState.value = 'error'
-    syncMessage.value = `恢复默认失败：${error.message}`
+    showToast(`恢复默认失败：${error.message}`)
   } finally {
     if (busyAction.value === 'reset') {
       busyAction.value = ''
@@ -570,7 +561,7 @@ async function autoSaveDayConfig() {
   daySaveState.value = 'saving'
 
   try {
-    const result = await saveDeviceRules(buildRulesPayload(), baseUrl.value)
+    const result = await saveDeviceRules(buildRulesPayload())
     if (result?.rules) {
       applyRules(result.rules)
     } else {
@@ -585,8 +576,9 @@ async function autoSaveDayConfig() {
       ])
     }
     daySaveState.value = 'success'
-  } catch {
+  } catch (error) {
     daySaveState.value = 'error'
+    showToast(`日间设置保存失败：${error.message}`)
   }
 }
 
@@ -594,7 +586,7 @@ async function autoSaveNightConfig() {
   nightSaveState.value = 'saving'
 
   try {
-    const result = await saveDeviceRules(buildRulesPayload(), baseUrl.value)
+    const result = await saveDeviceRules(buildRulesPayload())
     if (result?.rules) {
       applyRules(result.rules)
     } else {
@@ -609,8 +601,9 @@ async function autoSaveNightConfig() {
       ])
     }
     nightSaveState.value = 'success'
-  } catch {
+  } catch (error) {
     nightSaveState.value = 'error'
+    showToast(`夜间设置保存失败：${error.message}`)
   }
 }
 
@@ -621,15 +614,12 @@ async function togglePower() {
   busyAction.value = 'power'
   try {
     const next = !device.powerEnabled
-    await setDevicePower(next, baseUrl.value)
+    await setDevicePower(next)
     device.powerEnabled = next
     device.manualOverride = false
-    syncState.value = 'success'
-    syncMessage.value = next ? '电源已开启。' : '电源已关闭，所有继电器已断开。'
     await syncFromEsp32()
   } catch (error) {
-    syncState.value = 'error'
-    syncMessage.value = `电源操作失败：${error.message}`
+    showToast(`电源操作失败：${error.message}`)
   } finally {
     if (busyAction.value === 'power') {
       busyAction.value = ''
@@ -644,14 +634,12 @@ async function toggleRelay(relay) {
   busyAction.value = 'relay'
   try {
     const next = !device.relays[relay]
-    await toggleDeviceRelay(relay, next, baseUrl.value)
+    await toggleDeviceRelay(relay, next)
     device.relays[relay] = next
     device.manualOverride = true
-    syncMessage.value = `${relay} 已${next ? '开启' : '关闭'}（手动控制 60 秒）。`
     await syncFromEsp32()
   } catch (error) {
-    syncState.value = 'error'
-    syncMessage.value = `继电器操作失败：${error.message}`
+    showToast(`继电器操作失败：${error.message}`)
   } finally {
     if (busyAction.value === 'relay') {
       busyAction.value = ''
@@ -664,19 +652,15 @@ async function submitPins() {
     return
   }
   busyAction.value = 'pins'
-  syncState.value = 'loading'
-  syncMessage.value = '正在保存端口映射...'
 
   try {
-    const result = await saveDevicePins(buildPinsPayload(), baseUrl.value)
+    const result = await saveDevicePins(buildPinsPayload())
     if (result?.pins) {
       applyPins(result.pins)
     }
-    syncState.value = 'success'
-    syncMessage.value = '端口映射已保存。'
+    showToast('端口映射已保存', 'success')
   } catch (error) {
-    syncState.value = 'error'
-    syncMessage.value = `端口保存失败：${error.message}`
+    showToast(`端口保存失败：${error.message}`)
   } finally {
     if (busyAction.value === 'pins') {
       busyAction.value = ''
@@ -684,31 +668,70 @@ async function submitPins() {
   }
 }
 
-function startAutoSync() {
-  if (syncTimer) {
-    window.clearInterval(syncTimer)
+async function clearHistory() {
+  if (busyAction.value || !window.confirm('确定清空设备上的全部温湿度记录？此操作不可恢复。')) {
+    return
   }
-  syncFromEsp32()
-  syncTimer = window.setInterval(() => {
-    if (!busyAction.value) {
-      syncFromEsp32()
+  busyAction.value = 'history'
+  try {
+    const result = await clearDeviceHistory()
+    Object.assign(deviceInfo.history, result?.history ?? {})
+    showToast('历史记录已清空', 'success')
+  } catch (error) {
+    showToast(`清空记录失败：${error.message}`)
+  } finally {
+    if (busyAction.value === 'history') {
+      busyAction.value = ''
     }
-  }, 10000)
+  }
 }
 
+function formatBytes(bytes) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`
+}
+
+const webUiSourceLabel = computed(() => {
+  const source = deviceInfo.webui.source
+  if (source === 'uploaded') return '已上传版本'
+  if (source === 'builtin') return '固件内置版本'
+  return '—'
+})
+
+const wifiSignalLabel = computed(() => {
+  const rssi = Number(deviceInfo.wifi.rssi)
+  if (!device.wifiConnected || !Number.isFinite(rssi) || rssi === 0) return '—'
+  const level = rssi >= -60 ? '强' : rssi >= -72 ? '中' : '弱'
+  return `${level}（${rssi} dBm）`
+})
+
+const deviceInfoRows = computed(() => [
+  { label: '固件版本', value: deviceInfo.firmware.version || '—' },
+  { label: 'WiFi', value: device.wifiConnected ? deviceInfo.wifi.ssid || '—' : '未连接' },
+  { label: 'IP 地址', value: device.wifiConnected ? deviceInfo.wifi.ip || '—' : '—' },
+  { label: '信号', value: wifiSignalLabel.value },
+  { label: '网页', value: webUiSourceLabel.value },
+  {
+    label: '存储',
+    value: deviceInfo.webui.fsReady
+      ? `${formatBytes(deviceInfo.webui.fsUsedBytes)} / ${formatBytes(deviceInfo.webui.fsTotalBytes)}`
+      : '不可用'
+  }
+])
+
+// 只在打开页面时读取一次；之后靠操作后的回读或用户刷新页面更新
 onMounted(() => {
-  startAutoSync()
+  syncFromEsp32()
 })
 
 onUnmounted(() => {
-  if (syncTimer) {
-    window.clearInterval(syncTimer)
-  }
   if (daySaveTimer) {
     window.clearTimeout(daySaveTimer)
   }
   if (nightSaveTimer) {
     window.clearTimeout(nightSaveTimer)
+  }
+  if (toastTimer) {
+    window.clearTimeout(toastTimer)
   }
 })
 
@@ -814,10 +837,6 @@ watch(
             <h1>Sun Box</h1>
           </div>
         </div>
-        <div class="top-sync-indicator" :data-state="syncState">
-          <span class="sync-dot"></span>
-          <span>{{ topSyncLabel }}</span>
-        </div>
       </header>
 
       <main class="content">
@@ -839,7 +858,7 @@ watch(
                   <div class="gauge-center">
                     <div class="gauge-center-eyebrow">实时温度</div>
                     <div class="gauge-value">
-                      {{ device.currentTemp.toFixed(1) }}<span>°C</span>
+                      {{ tempText }}<span>°C</span>
                     </div>
                   </div>
                 </div>
@@ -1103,71 +1122,21 @@ watch(
           </div>
         </section>
 
+        <section v-else-if="activeTab === 'history'" class="screen">
+          <HistoryPanel />
+        </section>
+
         <section v-else class="screen">
           <div class="settings-page">
             <section class="settings-hero">
               <div>
                 <span class="settings-overline">System</span>
                 <h2>系统设置</h2>
-                <p>管理设备接入、电源控制、端口映射和当前连接状态。</p>
-              </div>
-              <div class="settings-hero-badge" :data-state="syncState">
-                <span class="sync-dot"></span>
-                <span>{{ topSyncLabel }}</span>
+                <p>管理端口映射、设备升级与配网和历史记录。</p>
               </div>
             </section>
 
             <section class="settings-grid">
-              <article class="settings-panel">
-                <div class="settings-panel-head">
-                  <div>
-                    <span class="section-kicker">Device</span>
-                    <h3>ESP32 地址</h3>
-                  </div>
-                  <span class="section-badge">Live</span>
-                </div>
-                <p class="settings-panel-copy">
-                  保存设备基础地址，页面会自动读取 <code>/api/status</code> 和 <code>/api/rules</code>。
-                </p>
-                <div class="input-row settings-input-row">
-                  <input
-                    id="baseUrl"
-                    v-model="baseUrl"
-                    type="text"
-                    placeholder="留空使用当前域名（同源）"
-                  />
-                  <button type="button" @click="saveBaseUrl">保存</button>
-                </div>
-              </article>
-
-              <article class="settings-panel">
-                <div class="settings-panel-head">
-                  <div>
-                    <span class="section-kicker">Power</span>
-                    <h3>总电源</h3>
-                  </div>
-                  <span class="section-badge" :class="device.powerEnabled ? '' : 'soft'">
-                    {{ device.powerEnabled ? 'On' : 'Off' }}
-                  </span>
-                </div>
-                <p class="settings-panel-copy">
-                  关闭后所有继电器立即断开并锁定；重新开启会恢复自动控制，并清除手动覆盖。
-                </p>
-                <label class="mode-toggle compact-toggle" aria-label="总电源">
-                  <span>
-                    <strong>{{ device.powerEnabled ? '已开启' : '已关闭' }}</strong>
-                    <small v-if="device.manualOverride">手动控制中，自动加温已暂停</small>
-                    <small v-else>切换设备全局电源</small>
-                  </span>
-                  <input
-                    :checked="device.powerEnabled"
-                    type="checkbox"
-                    :disabled="busyAction !== ''"
-                    @change="togglePower"
-                  />
-                </label>
-              </article>
-
               <article class="settings-panel">
                 <div class="settings-panel-head">
                   <div>
@@ -1216,26 +1185,65 @@ watch(
                   </button>
                 </div>
               </article>
-            </section>
 
-            <section class="settings-status-card" :data-state="syncState">
+              <article class="settings-panel">
                 <div class="settings-panel-head">
                   <div>
-                    <span class="section-kicker">Status</span>
-                    <h3>连接状态</h3>
+                    <span class="section-kicker">Info</span>
+                    <h3>设备信息</h3>
                   </div>
-                <span class="section-badge" :class="syncState">
-                  {{ syncState === 'success' ? 'OK' : syncState === 'error' ? 'Error' : syncState === 'loading' ? 'Syncing' : 'Idle' }}
-                </span>
-              </div>
-              <div class="status-pill-row">
-                <span class="status-pill" :class="{ active: device.powerEnabled }">电源</span>
-                <span class="status-pill" :class="{ active: device.wifiConnected }">Wi-Fi</span>
-                <span class="status-pill" :class="{ active: device.timeSynced }">NTP</span>
-                <span class="status-pill" :class="{ active: device.sensorReady }">Sensor</span>
-                <span class="status-pill" :class="{ active: device.manualOverride }">手动</span>
-              </div>
-              <p class="settings-panel-copy">{{ syncMessage }}</p>
+                  <span
+                    class="section-badge"
+                    :class="deviceInfo.firmware.pendingVerify ? 'loading' : ''"
+                  >
+                    {{ deviceInfo.firmware.pendingVerify ? '新固件待确认' : deviceInfo.firmware.version ? `v${deviceInfo.firmware.version}` : '—' }}
+                  </span>
+                </div>
+                <dl class="info-list">
+                  <div v-for="row in deviceInfoRows" :key="`info-${row.label}`" class="info-row">
+                    <dt>{{ row.label }}</dt>
+                    <dd>{{ row.value }}</dd>
+                  </div>
+                </dl>
+                <p v-if="deviceInfo.firmware.lastResult" class="settings-panel-copy">
+                  最近一次升级：{{ deviceInfo.firmware.lastResult }}
+                </p>
+                <div class="action-row">
+                  <a class="primary-button link-button" href="/update" target="_blank" rel="noopener">
+                    固件 / 网页升级
+                  </a>
+                  <a class="ghost-button link-button" href="/wifi" target="_blank" rel="noopener">
+                    WiFi 配网
+                  </a>
+                </div>
+              </article>
+
+              <article class="settings-panel">
+                <div class="settings-panel-head">
+                  <div>
+                    <span class="section-kicker">History</span>
+                    <h3>历史记录</h3>
+                  </div>
+                  <span class="section-badge" :class="deviceInfo.history.recording ? 'success' : 'soft'">
+                    {{ deviceInfo.history.recording ? '记录中' : '未记录' }}
+                  </span>
+                </div>
+                <p class="settings-panel-copy">
+                  已存最近记录 {{ deviceInfo.history.recentCount }} 条、长期记录 {{ deviceInfo.history.archiveCount }} 条。
+                  <template v-if="!deviceInfo.history.recording">设备时间同步（连上 WiFi）后才会开始记录。</template>
+                </p>
+                <div class="action-row">
+                  <button type="button" class="ghost-button" @click="activeTab = 'history'">查看记录</button>
+                  <button
+                    type="button"
+                    class="ghost-button danger-button"
+                    :disabled="busyAction !== ''"
+                    @click="clearHistory"
+                  >
+                    清空记录
+                  </button>
+                </div>
+              </article>
             </section>
           </div>
         </section>
@@ -1254,6 +1262,12 @@ watch(
           <span>{{ tab.label }}</span>
         </button>
       </nav>
+
+      <Transition name="toast">
+        <div v-if="toast" class="toast" :class="toast.type" role="alert" @click="toast = null">
+          {{ toast.message }}
+        </div>
+      </Transition>
     </div>
   </div>
 </template>

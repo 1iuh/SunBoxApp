@@ -1,40 +1,8 @@
-// 默认使用与页面相同的域（同源）：面板和 ESP32 由同一台 HTTP 服务托管时留空即可
-const DEFAULT_BASE_URL = ''
-const BASE_URL_COOKIE = 'sunbox-esp32-base-url'
+// 网页由 ESP32 自己托管，所有请求都发往同源的 /api/*。
+// 本地调试（npm run dev）时由 vite.config.js 的代理转发到设备，见 SUNBOX_DEVICE。
 
-function readCookie(name) {
-  const prefix = `${name}=`
-  const entries = document.cookie ? document.cookie.split(';') : []
-  for (const entry of entries) {
-    const trimmed = entry.trim()
-    if (trimmed.startsWith(prefix)) {
-      try {
-        return decodeURIComponent(trimmed.slice(prefix.length))
-      } catch {
-        return trimmed.slice(prefix.length)
-      }
-    }
-  }
-  return ''
-}
-
-function writeCookie(name, value) {
-  // expires in the year 9999 → effectively infinite lifetime
-  const encoded = encodeURIComponent(value)
-  const expires = `expires=Tue, 31 Dec 9999 23:59:59 GMT`
-  document.cookie = `${name}=${encoded}; ${expires}; path=/; SameSite=Lax`
-}
-
-export function getEsp32BaseUrl() {
-  return readCookie(BASE_URL_COOKIE) || DEFAULT_BASE_URL
-}
-
-export function setEsp32BaseUrl(url) {
-  writeCookie(BASE_URL_COOKIE, url.trim())
-}
-
-async function request(path, options = {}, baseUrl = getEsp32BaseUrl()) {
-  const response = await fetch(`${baseUrl}${path}`, {
+async function request(path, options = {}) {
+  const response = await fetch(path, {
     headers: {
       Accept: 'application/json',
       ...options.headers
@@ -52,56 +20,62 @@ async function request(path, options = {}, baseUrl = getEsp32BaseUrl()) {
   return data
 }
 
-function postJson(path, body, baseUrl = getEsp32BaseUrl()) {
-  return request(
-    path,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
+function postJson(path, body) {
+  return request(path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
     },
-    baseUrl
-  )
+    body: JSON.stringify(body)
+  })
 }
 
 // GET /api/status — runtime status, sensor state, relay state, pins and active rules.
-export function fetchDeviceStatus(baseUrl = getEsp32BaseUrl()) {
-  return request('/api/status', {}, baseUrl)
+export function fetchDeviceStatus() {
+  return request('/api/status')
 }
 
 // GET /api/rules — persisted mode rules (schedule, thresholds, per-relay roles).
-export function fetchDeviceRules(baseUrl = getEsp32BaseUrl()) {
-  return request('/api/rules', {}, baseUrl)
+export function fetchDeviceRules() {
+  return request('/api/rules')
 }
 
 // POST /api/rules — update the full mode-rule configuration.
-export function saveDeviceRules(rules, baseUrl = getEsp32BaseUrl()) {
-  return postJson('/api/rules', rules, baseUrl)
+export function saveDeviceRules(rules) {
+  return postJson('/api/rules', rules)
 }
 
 // POST /api/config/reset — reset mode rules to firmware defaults.
-export function resetDeviceConfig(baseUrl = getEsp32BaseUrl()) {
-  return request('/api/config/reset', { method: 'POST' }, baseUrl)
+export function resetDeviceConfig() {
+  return request('/api/config/reset', { method: 'POST' })
 }
 
 // POST /api/power — global power switch.
-export function setDevicePower(on, baseUrl = getEsp32BaseUrl()) {
-  return postJson('/api/power', { on }, baseUrl)
+export function setDevicePower(on) {
+  return postJson('/api/power', { on })
 }
 
 // POST /api/relays — manually toggle a single relay (60s manual override).
-export function toggleDeviceRelay(relay, on, baseUrl = getEsp32BaseUrl()) {
-  return postJson('/api/relays', { relay, on }, baseUrl)
+export function toggleDeviceRelay(relay, on) {
+  return postJson('/api/relays', { relay, on })
 }
 
 // GET /api/pins — current relay-to-pin mapping.
-export function fetchDevicePins(baseUrl = getEsp32BaseUrl()) {
-  return request('/api/pins', {}, baseUrl)
+export function fetchDevicePins() {
+  return request('/api/pins')
 }
 
 // POST /api/pins — update the relay-to-pin mapping.
-export function saveDevicePins(pins, baseUrl = getEsp32BaseUrl()) {
-  return postJson('/api/pins', pins, baseUrl)
+export function saveDevicePins(pins) {
+  return postJson('/api/pins', pins)
+}
+
+// GET /api/history — temperature/humidity history (part: recent | archive | all).
+export function fetchDeviceHistory(part = 'all') {
+  return request(`/api/history?part=${encodeURIComponent(part)}`)
+}
+
+// POST /api/history/clear — delete all stored history.
+export function clearDeviceHistory() {
+  return request('/api/history/clear', { method: 'POST' })
 }
