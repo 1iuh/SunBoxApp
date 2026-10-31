@@ -84,9 +84,9 @@ const device = reactive({
 })
 
 const relayModeOptions = [
-  { value: 'on', label: '常亮' },
-  { value: 'off', label: '常闭' },
-  { value: 'heat', label: '加温时启用' }
+  { value: 'on', label: '一直开' },
+  { value: 'off', label: '一直关' },
+  { value: 'heat', label: '按温度' }
 ]
 
 const gpioOptions = [2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -98,10 +98,10 @@ const homeRelays = [
 ]
 
 const relayList = [
-  { key: 'dayHeat', label: '日间加温灯', icon: '☀', accent: '' },
-  { key: 'uvb', label: 'UVB 灯', icon: '◌', accent: 'muted' },
-  { key: 'nightHeat', label: '夜间加温灯', icon: '☾', accent: 'night-accent' },
-  { key: 'reserved', label: '备用继电器', icon: '◇', accent: 'muted' }
+  { key: 'dayHeat', label: '日间加温灯', icon: '☀' },
+  { key: 'uvb', label: 'UVB 灯', icon: '◌' },
+  { key: 'nightHeat', label: '夜间加温灯', icon: '☾' },
+  { key: 'reserved', label: '备用继电器', icon: '◇' }
 ]
 
 const pinRelayList = [
@@ -201,18 +201,9 @@ const gaugeArcStyle = computed(() => {
   }
 })
 
-const dayModeLabel = computed(() => {
-  return device.mode === 'night' ? '夜间模式 (Night Mode)' : '日间模式 (Day Mode)'
-})
-
 const tempText = computed(() => (device.currentTemp == null ? '--' : device.currentTemp.toFixed(1)))
 
-const deviceIndicators = computed(() => [
-  { label: '湿度', value: device.humidity == null ? '--' : `${device.humidity.toFixed(0)}%` },
-  { label: 'Wi-Fi', value: device.wifiConnected ? '已连接' : '未连接' },
-  { label: '时钟', value: device.timeSynced ? '已同步' : '未同步' },
-  { label: '传感器', value: device.sensorReady ? '正常' : '异常' }
-])
+const humidityText = computed(() => (device.humidity == null ? '--' : device.humidity.toFixed(0)))
 
 const daySaveLabel = computed(() => {
   if (daySaveState.value === 'saving') {
@@ -340,6 +331,10 @@ function modeStatusText() {
     return '状态：传感器暂无读数，加温已关闭'
   }
 
+  if (!device.timeSynced) {
+    return '状态：时钟未同步，暂按日间模式运行'
+  }
+
   if (device.mode === 'night') {
     return device.relays.nightHeat ? '状态：夜间加温中' : '状态：夜间待机'
   }
@@ -367,10 +362,7 @@ function hourToTime(hour) {
 }
 
 function formatHourLabel(value) {
-  const hour = parseHour(value)
-  const suffix = hour >= 12 ? 'PM' : 'AM'
-  const hour12 = hour % 12 || 12
-  return `${hour12}:00 ${suffix}`
+  return `${String(parseHour(value)).padStart(2, '0')}:00`
 }
 
 function calculateWindowHours(startValue, endValue) {
@@ -832,55 +824,36 @@ watch(
       <header class="topbar">
         <div class="brand-lockup">
           <div class="brand-mark">☀</div>
-          <div>
-            <p class="brand-overline">smart climate</p>
-            <h1>Sun Box</h1>
-          </div>
+          <h1>Sun Box</h1>
         </div>
+        <span class="mode-chip" :class="device.mode">{{ device.mode === 'night' ? '☾ 夜间' : '☀ 日间' }}</span>
       </header>
 
       <main class="content">
-        <section v-if="activeTab === 'home'" class="screen home-screen">
-          <div class="panel home-panel">
-            <div class="panel-header">
-              <h2>设备概览</h2>
-            </div>
-
-            <div class="hero-card home-hero-card">
-              <div class="hero-gradient"></div>
-              <div class="gauge-wrap">
-                <div class="gauge-ring" :style="gaugeArcStyle">
-                  <div class="gauge-arc gauge-arc-track"></div>
-                  <div class="gauge-arc gauge-arc-temp"></div>
-                  <div class="gauge-needle gauge-needle-temp">
-                    <span class="gauge-needle-bar"></span>
-                  </div>
-                  <div class="gauge-center">
-                    <div class="gauge-center-eyebrow">实时温度</div>
-                    <div class="gauge-value">
-                      {{ tempText }}<span>°C</span>
-                    </div>
-                  </div>
-                </div>
+        <section v-if="activeTab === 'home'" class="screen">
+          <div class="card hero-card">
+            <div class="gauge-ring" :style="gaugeArcStyle">
+              <div class="gauge-arc gauge-arc-track"></div>
+              <div class="gauge-arc gauge-arc-temp"></div>
+              <div class="gauge-needle gauge-needle-temp">
+                <span class="gauge-needle-bar"></span>
               </div>
-              <div class="hero-footer">
-                <p>{{ device.status }}</p>
+              <div class="gauge-center">
+                <div class="gauge-center-eyebrow">实时温度</div>
+                <div class="gauge-value">{{ tempText }}<span>°C</span></div>
+                <div class="gauge-sub">湿度 {{ humidityText }}%</div>
               </div>
             </div>
+            <p class="hero-status">{{ device.status }}</p>
+          </div>
 
-            <div class="stack-card status-card status-grid-3 home-status-grid home-indicator-grid">
-              <div v-for="item in deviceIndicators" :key="item.label" class="status-tile">
-                <span class="eyebrow">{{ item.label }}</span>
-                <strong>{{ item.value }}</strong>
-              </div>
-            </div>
-
-            <div class="stack-card home-power-card" :class="{ off: !device.powerEnabled }">
-              <div class="home-power-info">
-                <span class="eyebrow">总电源</span>
-                <strong>{{ device.powerEnabled ? '运行中' : '已关闭' }}</strong>
+          <div class="card list-card">
+            <div class="list-row" :class="{ 'is-off': !device.powerEnabled }">
+              <div class="list-text">
+                <strong>总电源</strong>
                 <small v-if="device.manualOverride">手动控制中，自动加温已暂停</small>
-                <small v-else>断开后所有继电器立即锁定</small>
+                <small v-else-if="device.powerEnabled">断开后所有继电器立即锁定</small>
+                <small v-else>已关闭，所有继电器已断开</small>
               </div>
               <label class="toggle-switch" aria-label="总电源">
                 <input
@@ -892,123 +865,112 @@ watch(
                 <span class="toggle-slider"></span>
               </label>
             </div>
+          </div>
 
-            <div class="stack-card status-card status-grid-3 home-status-grid home-switch-grid">
-              <div
-                v-for="relay in homeRelays"
-                :key="`home-relay-${relay.key}`"
-                class="status-tile status-switch-tile"
-              >
-                <span class="eyebrow">{{ relay.label }}</span>
-                <div class="status-switch-row">
-                  <label class="toggle-switch status-switch-display" :aria-label="`${relay.label} 状态`">
-                    <input
-                      :checked="device.relays[relay.key]"
-                      type="checkbox"
-                      :disabled="!device.powerEnabled || busyAction !== ''"
-                      @change="toggleRelay(relay.key)"
-                    />
-                    <span class="toggle-slider"></span>
-                  </label>
-                </div>
+          <p class="section-label">手动控制</p>
+          <div class="card list-card" :class="{ 'is-locked': !device.powerEnabled }">
+            <div v-for="relay in homeRelays" :key="`home-relay-${relay.key}`" class="list-row">
+              <div class="list-text">
+                <strong>{{ relay.label }}</strong>
               </div>
+              <label class="toggle-switch" :aria-label="relay.label">
+                <input
+                  :checked="device.relays[relay.key]"
+                  type="checkbox"
+                  :disabled="!device.powerEnabled || busyAction !== ''"
+                  @change="toggleRelay(relay.key)"
+                />
+                <span class="toggle-slider"></span>
+              </label>
             </div>
           </div>
+          <p class="hint">{{ device.powerEnabled ? '手动切换灯后保持 60 秒，之后自动恢复温控。' : '总电源已关闭，打开后才能手动控制。' }}</p>
         </section>
 
         <section v-else-if="activeTab === 'day'" class="screen">
-          <div class="panel">
-            <div class="panel-header">
-              <h2>日间设置</h2>
-              <div class="panel-header-meta">
-                <span class="autosave-badge" :class="daySaveState">{{ daySaveLabel }}</span>
-                <span class="panel-icon">☀</span>
-              </div>
-            </div>
+          <div class="page-header">
+            <h2>日间设置</h2>
+            <span class="autosave-badge" :class="daySaveState">{{ daySaveLabel }}</span>
+          </div>
 
-            <div class="slider-card">
-              <div class="slider-title">
-                <span>时间窗口</span>
-                <span>
-                  {{ formatHourLabel(device.rules.dayStart) }} - {{ formatHourLabel(device.rules.nightStart) }}
-                  · {{ calculateWindowHours(device.rules.dayStart, device.rules.nightStart) }}小时
-                </span>
-              </div>
-              <div class="dual-range" :style="scheduleRangeStyle">
-                <div class="dual-range-track"></div>
-                <input
-                  :value="parseHour(device.rules.dayStart)"
-                  type="range"
-                  min="0"
-                  max="23"
-                  step="1"
-                  class="range-thumb"
-                  @input="device.rules.dayStart = hourToTime($event.target.value)"
-                />
-                <input
-                  :value="parseHour(device.rules.nightStart)"
-                  type="range"
-                  min="0"
-                  max="23"
-                  step="1"
-                  class="range-thumb range-thumb-readonly"
-                  disabled
-                />
-              </div>
-              <div class="range-labels">
-                <span>日间开始 {{ formatHourLabel(device.rules.dayStart) }}</span>
-                <span>夜间开始 {{ formatHourLabel(device.rules.nightStart) }}</span>
-              </div>
+          <div class="card slider-card">
+            <div class="slider-title">
+              <span>时间窗口</span>
+              <strong>
+                {{ formatHourLabel(device.rules.dayStart) }} – {{ formatHourLabel(device.rules.nightStart) }}
+                <em>{{ calculateWindowHours(device.rules.dayStart, device.rules.nightStart) }} 小时</em>
+              </strong>
             </div>
-
-            <div class="slider-card">
-              <div class="slider-title">
-                <span>温度范围</span>
-                <span>{{ device.rules.dayMinTemp.toFixed(1) }}°C - {{ device.rules.dayMaxTemp.toFixed(1) }}°C</span>
-              </div>
-              <div class="dual-range" :style="dayRangeStyle">
-                <div class="dual-range-track"></div>
-                <input
-                  :value="device.rules.dayMinTemp"
-                  type="range"
-                  min="18"
-                  max="40"
-                  step="0.5"
-                  class="range-thumb"
-                  @input="updateDayMinTemp($event.target.value)"
-                />
-                <input
-                  :value="device.rules.dayMaxTemp"
-                  type="range"
-                  min="18"
-                  max="40"
-                  step="0.5"
-                  class="range-thumb"
-                  @input="updateDayMaxTemp($event.target.value)"
-                />
-              </div>
-              <div class="range-labels">
-                <span>最低 {{ device.rules.dayMinTemp.toFixed(1) }}°C</span>
-                <span>最高 {{ device.rules.dayMaxTemp.toFixed(1) }}°C</span>
-              </div>
+            <div class="dual-range" :style="scheduleRangeStyle">
+              <div class="dual-range-track"></div>
+              <input
+                :value="parseHour(device.rules.dayStart)"
+                type="range"
+                min="0"
+                max="23"
+                step="1"
+                class="range-thumb"
+                @input="device.rules.dayStart = hourToTime($event.target.value)"
+              />
+              <input
+                :value="parseHour(device.rules.nightStart)"
+                type="range"
+                min="0"
+                max="23"
+                step="1"
+                class="range-thumb range-thumb-readonly"
+                disabled
+              />
             </div>
+            <div class="range-labels">
+              <span>拖动设置日间开始</span>
+              <span>夜间开始在夜间页设置</span>
+            </div>
+          </div>
 
-            <div
-              v-for="relay in relayList"
-              :key="`day-${relay.key}`"
-              class="device-mode-card"
-              :class="relay.accent"
-            >
-              <div class="device-mode-header">
-                <span class="toggle-icon">{{ relay.icon }}</span>
-                <p>{{ relay.label }}</p>
+          <div class="card slider-card">
+            <div class="slider-title">
+              <span>温度范围</span>
+              <strong>{{ device.rules.dayMinTemp.toFixed(1) }} – {{ device.rules.dayMaxTemp.toFixed(1) }}°C</strong>
+            </div>
+            <div class="dual-range" :style="dayRangeStyle">
+              <div class="dual-range-track"></div>
+              <input
+                :value="device.rules.dayMinTemp"
+                type="range"
+                min="18"
+                max="40"
+                step="0.5"
+                class="range-thumb"
+                @input="updateDayMinTemp($event.target.value)"
+              />
+              <input
+                :value="device.rules.dayMaxTemp"
+                type="range"
+                min="18"
+                max="40"
+                step="0.5"
+                class="range-thumb"
+                @input="updateDayMaxTemp($event.target.value)"
+              />
+            </div>
+            <div class="range-labels">
+              <span>下限</span>
+              <span>上限</span>
+            </div>
+          </div>
+
+          <p class="section-label">灯怎么开</p>
+          <div class="card list-card">
+            <div v-for="relay in relayList" :key="`day-${relay.key}`" class="list-row">
+              <div class="list-text">
+                <strong><span class="row-icon">{{ relay.icon }}</span>{{ relay.label }}</strong>
               </div>
-              <div class="mode-picker">
+              <div class="segmented">
                 <button
                   v-for="option in relayModeOptions"
                   :key="`day-${relay.key}-${option.value}`"
                   type="button"
-                  class="mode-option"
                   :class="{ active: relayRoleMode('day', relay.key) === option.value }"
                   @click="setRelayRoleMode('day', relay.key, option.value)"
                 >
@@ -1017,101 +979,93 @@ watch(
               </div>
             </div>
           </div>
+          <p class="hint">按温度：低于温度范围下限时开灯，高于上限时关灯。</p>
         </section>
 
         <section v-else-if="activeTab === 'night'" class="screen">
-          <div class="panel">
-            <div class="panel-header">
-              <h2>夜间设置</h2>
-              <div class="panel-header-meta">
-                <span class="autosave-badge" :class="nightSaveState">{{ nightSaveLabel }}</span>
-                <span class="panel-icon">☾</span>
-              </div>
-            </div>
+          <div class="page-header">
+            <h2>夜间设置</h2>
+            <span class="autosave-badge" :class="nightSaveState">{{ nightSaveLabel }}</span>
+          </div>
 
-            <div class="slider-card">
-              <div class="slider-title">
-                <span>时间窗口</span>
-                <span>
-                  {{ formatHourLabel(device.rules.nightStart) }} - {{ formatHourLabel(device.rules.dayStart) }}
-                  · {{ calculateWindowHours(device.rules.nightStart, device.rules.dayStart) }}小时
-                </span>
-              </div>
-              <div class="dual-range dual-range-reverse" :style="nightScheduleRangeStyle">
-                <div class="dual-range-track"></div>
-                <input
-                  :value="parseHour(device.rules.nightStart)"
-                  type="range"
-                  min="0"
-                  max="23"
-                  step="1"
-                  class="range-thumb"
-                  @input="device.rules.nightStart = hourToTime($event.target.value)"
-                />
-                <input
-                  :value="parseHour(device.rules.dayStart)"
-                  type="range"
-                  min="0"
-                  max="23"
-                  step="1"
-                  class="range-thumb range-thumb-readonly"
-                  disabled
-                />
-              </div>
-              <div class="range-labels">
-                <span>夜间开始 {{ formatHourLabel(device.rules.nightStart) }}</span>
-                <span>日间开始 {{ formatHourLabel(device.rules.dayStart) }}</span>
-              </div>
+          <div class="card slider-card">
+            <div class="slider-title">
+              <span>时间窗口</span>
+              <strong>
+                {{ formatHourLabel(device.rules.nightStart) }} – {{ formatHourLabel(device.rules.dayStart) }}
+                <em>{{ calculateWindowHours(device.rules.nightStart, device.rules.dayStart) }} 小时</em>
+              </strong>
             </div>
-
-            <div class="slider-card">
-              <div class="slider-title">
-                <span>温度范围</span>
-                <span>{{ device.rules.nightMinTemp.toFixed(1) }}°C - {{ device.rules.nightMaxTemp.toFixed(1) }}°C</span>
-              </div>
-              <div class="dual-range" :style="nightRangeStyle">
-                <div class="dual-range-track"></div>
-                <input
-                  :value="device.rules.nightMinTemp"
-                  type="range"
-                  min="15"
-                  max="32"
-                  step="0.5"
-                  class="range-thumb"
-                  @input="updateNightMinTemp($event.target.value)"
-                />
-                <input
-                  :value="device.rules.nightMaxTemp"
-                  type="range"
-                  min="15"
-                  max="32"
-                  step="0.5"
-                  class="range-thumb"
-                  @input="updateNightMaxTemp($event.target.value)"
-                />
-              </div>
-              <div class="range-labels">
-                <span>最低 {{ device.rules.nightMinTemp.toFixed(1) }}°C</span>
-                <span>最高 {{ device.rules.nightMaxTemp.toFixed(1) }}°C</span>
-              </div>
+            <div class="dual-range dual-range-reverse" :style="nightScheduleRangeStyle">
+              <div class="dual-range-track"></div>
+              <input
+                :value="parseHour(device.rules.nightStart)"
+                type="range"
+                min="0"
+                max="23"
+                step="1"
+                class="range-thumb"
+                @input="device.rules.nightStart = hourToTime($event.target.value)"
+              />
+              <input
+                :value="parseHour(device.rules.dayStart)"
+                type="range"
+                min="0"
+                max="23"
+                step="1"
+                class="range-thumb range-thumb-readonly"
+                disabled
+              />
             </div>
+            <div class="range-labels">
+              <span>拖动设置夜间开始</span>
+              <span>日间开始在日间页设置</span>
+            </div>
+          </div>
 
-            <div
-              v-for="relay in relayList"
-              :key="`night-${relay.key}`"
-              class="device-mode-card"
-              :class="relay.accent"
-            >
-              <div class="device-mode-header">
-                <span class="toggle-icon">{{ relay.icon }}</span>
-                <p>{{ relay.label }}</p>
+          <div class="card slider-card">
+            <div class="slider-title">
+              <span>温度范围</span>
+              <strong>{{ device.rules.nightMinTemp.toFixed(1) }} – {{ device.rules.nightMaxTemp.toFixed(1) }}°C</strong>
+            </div>
+            <div class="dual-range" :style="nightRangeStyle">
+              <div class="dual-range-track"></div>
+              <input
+                :value="device.rules.nightMinTemp"
+                type="range"
+                min="15"
+                max="32"
+                step="0.5"
+                class="range-thumb"
+                @input="updateNightMinTemp($event.target.value)"
+              />
+              <input
+                :value="device.rules.nightMaxTemp"
+                type="range"
+                min="15"
+                max="32"
+                step="0.5"
+                class="range-thumb"
+                @input="updateNightMaxTemp($event.target.value)"
+              />
+            </div>
+            <div class="range-labels">
+              <span>下限</span>
+              <span>上限</span>
+            </div>
+          </div>
+
+          <p class="section-label">灯怎么开</p>
+          <div class="card list-card">
+            <div v-for="relay in relayList" :key="`night-${relay.key}`" class="list-row">
+              <div class="list-text">
+                <strong><span class="row-icon">{{ relay.icon }}</span>{{ relay.label }}</strong>
               </div>
-              <div class="mode-picker">
+              <div class="segmented">
                 <button
                   v-for="option in relayModeOptions"
                   :key="`night-${relay.key}-${option.value}`"
                   type="button"
-                  class="mode-option"
                   :class="{ active: relayRoleMode('night', relay.key) === option.value }"
                   @click="setRelayRoleMode('night', relay.key, option.value)"
                 >
@@ -1120,6 +1074,7 @@ watch(
               </div>
             </div>
           </div>
+          <p class="hint">按温度：低于温度范围下限时开灯，高于上限时关灯。</p>
         </section>
 
         <section v-else-if="activeTab === 'history'" class="screen">
@@ -1127,124 +1082,71 @@ watch(
         </section>
 
         <section v-else class="screen">
-          <div class="settings-page">
-            <section class="settings-hero">
-              <div>
-                <span class="settings-overline">System</span>
-                <h2>系统设置</h2>
-                <p>管理端口映射、设备升级与配网和历史记录。</p>
+          <div class="page-header">
+            <h2>系统</h2>
+          </div>
+
+          <p class="section-label">端口映射</p>
+          <div class="card list-card">
+            <label v-for="item in pinRelayList" :key="`pin-${item.key}`" class="list-row">
+              <div class="list-text">
+                <strong>{{ item.label }}</strong>
               </div>
-            </section>
+              <select v-model="device.pins[item.key]" class="port-select">
+                <option v-for="gpio in gpioOptions" :key="`pin-${item.key}-${gpio}`" :value="gpio">
+                  IO{{ gpio }}
+                </option>
+              </select>
+            </label>
+          </div>
+          <p class="hint">可选 IO2–IO10，四路需互不相同，保存后立即生效。</p>
+          <div class="action-row">
+            <button type="button" class="primary-button" :disabled="busyAction !== ''" @click="submitPins">
+              保存端口映射
+            </button>
+            <button type="button" class="ghost-button" :disabled="busyAction !== ''" @click="restoreDefaults">
+              恢复默认规则
+            </button>
+          </div>
 
-            <section class="settings-grid">
-              <article class="settings-panel">
-                <div class="settings-panel-head">
-                  <div>
-                    <span class="section-kicker">Mapping</span>
-                    <h3>端口设置</h3>
-                  </div>
-                  <span class="section-badge warm">GPIO</span>
-                </div>
-                <p class="settings-panel-copy">
-                  为四路继电器指定对应的 GPIO 引脚（可选 2–10，需互不相同），保存后立即生效。
-                </p>
-                <div class="port-settings-list">
-                  <label
-                    v-for="item in pinRelayList"
-                    :key="`pin-${item.key}`"
-                    class="port-setting-row"
-                  >
-                    <span>{{ item.label }}</span>
-                    <select v-model="device.pins[item.key]" class="port-select">
-                      <option
-                        v-for="gpio in gpioOptions"
-                        :key="`pin-${item.key}-${gpio}`"
-                        :value="gpio"
-                      >
-                        IO{{ gpio }}
-                      </option>
-                    </select>
-                  </label>
-                </div>
-                <div class="action-row">
-                  <button
-                    type="button"
-                    class="primary-button"
-                    :disabled="busyAction !== ''"
-                    @click="submitPins"
-                  >
-                    保存端口映射
-                  </button>
-                  <button
-                    type="button"
-                    class="ghost-button"
-                    :disabled="busyAction !== ''"
-                    @click="restoreDefaults"
-                  >
-                    恢复默认规则
-                  </button>
-                </div>
-              </article>
+          <p class="section-label">
+            设备信息
+            <span v-if="deviceInfo.firmware.pendingVerify" class="badge warn">新固件待确认</span>
+          </p>
+          <div class="card list-card">
+            <div v-for="row in deviceInfoRows" :key="`info-${row.label}`" class="list-row info-row">
+              <span>{{ row.label }}</span>
+              <strong>{{ row.value }}</strong>
+            </div>
+          </div>
+          <p v-if="deviceInfo.firmware.lastResult" class="hint">最近一次升级：{{ deviceInfo.firmware.lastResult }}</p>
+          <div class="action-row">
+            <a class="ghost-button" href="/update" target="_blank" rel="noopener">固件 / 网页升级</a>
+            <a class="ghost-button" href="/wifi" target="_blank" rel="noopener">WiFi 配网</a>
+          </div>
 
-              <article class="settings-panel">
-                <div class="settings-panel-head">
-                  <div>
-                    <span class="section-kicker">Info</span>
-                    <h3>设备信息</h3>
-                  </div>
-                  <span
-                    class="section-badge"
-                    :class="deviceInfo.firmware.pendingVerify ? 'loading' : ''"
-                  >
-                    {{ deviceInfo.firmware.pendingVerify ? '新固件待确认' : deviceInfo.firmware.version ? `v${deviceInfo.firmware.version}` : '—' }}
-                  </span>
-                </div>
-                <dl class="info-list">
-                  <div v-for="row in deviceInfoRows" :key="`info-${row.label}`" class="info-row">
-                    <dt>{{ row.label }}</dt>
-                    <dd>{{ row.value }}</dd>
-                  </div>
-                </dl>
-                <p v-if="deviceInfo.firmware.lastResult" class="settings-panel-copy">
-                  最近一次升级：{{ deviceInfo.firmware.lastResult }}
-                </p>
-                <div class="action-row">
-                  <a class="primary-button link-button" href="/update" target="_blank" rel="noopener">
-                    固件 / 网页升级
-                  </a>
-                  <a class="ghost-button link-button" href="/wifi" target="_blank" rel="noopener">
-                    WiFi 配网
-                  </a>
-                </div>
-              </article>
-
-              <article class="settings-panel">
-                <div class="settings-panel-head">
-                  <div>
-                    <span class="section-kicker">History</span>
-                    <h3>历史记录</h3>
-                  </div>
-                  <span class="section-badge" :class="deviceInfo.history.recording ? 'success' : 'soft'">
-                    {{ deviceInfo.history.recording ? '记录中' : '未记录' }}
-                  </span>
-                </div>
-                <p class="settings-panel-copy">
-                  已存最近记录 {{ deviceInfo.history.recentCount }} 条、长期记录 {{ deviceInfo.history.archiveCount }} 条。
-                  <template v-if="!deviceInfo.history.recording">设备时间同步（连上 WiFi）后才会开始记录。</template>
-                </p>
-                <div class="action-row">
-                  <button type="button" class="ghost-button" @click="activeTab = 'history'">查看记录</button>
-                  <button
-                    type="button"
-                    class="ghost-button danger-button"
-                    :disabled="busyAction !== ''"
-                    @click="clearHistory"
-                  >
-                    清空记录
-                  </button>
-                </div>
-              </article>
-            </section>
+          <p class="section-label">
+            历史记录
+            <span class="badge" :class="deviceInfo.history.recording ? 'ok' : ''">
+              {{ deviceInfo.history.recording ? '记录中' : '未记录' }}
+            </span>
+          </p>
+          <div class="card list-card">
+            <div class="list-row info-row">
+              <span>最近 7 天</span>
+              <strong>{{ deviceInfo.history.recentCount }} 条</strong>
+            </div>
+            <div class="list-row info-row">
+              <span>长期记录</span>
+              <strong>{{ deviceInfo.history.archiveCount }} 条</strong>
+            </div>
+          </div>
+          <p v-if="!deviceInfo.history.recording" class="hint">设备时间同步（连上 WiFi）后才会开始记录。</p>
+          <div class="action-row">
+            <button type="button" class="ghost-button" @click="activeTab = 'history'">查看记录</button>
+            <button type="button" class="ghost-button danger" :disabled="busyAction !== ''" @click="clearHistory">
+              清空记录
+            </button>
           </div>
         </section>
       </main>

@@ -66,23 +66,19 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="panel history-panel">
-    <div class="panel-header">
+  <div class="screen">
+    <div class="page-header">
       <h2>历史记录</h2>
-      <div class="panel-header-meta">
-        <span class="autosave-badge" :class="loadState">
-          {{ loadState === 'loading' ? '读取中...' : loadState === 'error' ? '读取失败' : `${points.length} 条` }}
-        </span>
-        <span class="panel-icon">∿</span>
-      </div>
+      <span class="autosave-badge" :class="loadState">
+        {{ loadState === 'loading' ? '读取中...' : loadState === 'error' ? '读取失败' : `${points.length} 条` }}
+      </span>
     </div>
 
-    <div class="mode-picker history-picker">
+    <div class="segmented segmented-full">
       <button
         v-for="option in HISTORY_RANGES"
         :key="`range-${option.key}`"
         type="button"
-        class="mode-option"
         :class="{ active: range === option.key }"
         @click="range = option.key"
       >
@@ -90,9 +86,9 @@ onMounted(load)
       </button>
     </div>
 
-    <div class="slider-card history-card">
-      <div class="slider-title">
-        <div class="history-metric-switch">
+    <div class="card history-card">
+      <div class="history-toolbar">
+        <div class="segmented">
           <button
             v-for="option in metricOptions"
             :key="`metric-${option.key}`"
@@ -121,35 +117,31 @@ onMounted(load)
       />
     </div>
 
-    <div v-if="stats" class="stack-card status-card status-grid-3 history-stats">
-      <div class="status-tile">
-        <span class="eyebrow">最低</span>
+    <div v-if="stats" class="card indicator-row history-stats">
+      <div class="indicator">
+        <span>最低</span>
         <strong>{{ formatValue(stats.min[metric]) }}{{ unit }}</strong>
         <small>{{ formatDateTime(stats.min.t) }}</small>
       </div>
-      <div class="status-tile">
-        <span class="eyebrow">平均</span>
+      <div class="indicator">
+        <span>平均</span>
         <strong>{{ formatValue(stats.avg) }}{{ unit }}</strong>
-        <small>{{ points.length }} 个记录点</small>
+        <small>{{ points.length }} 个点</small>
       </div>
-      <div class="status-tile">
-        <span class="eyebrow">最高</span>
+      <div class="indicator">
+        <span>最高</span>
         <strong>{{ formatValue(stats.max[metric]) }}{{ unit }}</strong>
         <small>{{ formatDateTime(stats.max.t) }}</small>
       </div>
     </div>
 
-    <p class="settings-panel-copy">
+    <p class="hint">
       每条记录是 10 分钟内的平均值。最近 7 天保留全部记录；更早的每天只保留 0/6/12/18 点四条，保存 2 年。
     </p>
 
     <div class="action-row">
-      <button type="button" class="primary-button" :disabled="loadState === 'loading'" @click="load">
-        刷新
-      </button>
-      <button type="button" class="ghost-button" :disabled="!points.length" @click="exportCsv">
-        导出 CSV
-      </button>
+      <button type="button" class="ghost-button" :disabled="loadState === 'loading'" @click="load">刷新</button>
+      <button type="button" class="ghost-button" :disabled="!points.length" @click="exportCsv">导出 CSV</button>
     </div>
   </div>
 </template>

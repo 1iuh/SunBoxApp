@@ -18,8 +18,8 @@ const props = defineProps({
   showHeat: { type: Boolean, default: true }
 })
 
-const HEIGHT = 200
-const PAD = { left: 36, right: 10, top: 12, bottom: 24 }
+const HEIGHT = 180
+const PAD = { left: 36, right: 10, top: 20, bottom: 24 }
 
 const root = ref(null)
 const width = ref(340)
@@ -142,7 +142,7 @@ function clearHover() {
         <line :x1="PAD.left" :x2="width - PAD.right" :y1="tick.y" :y2="tick.y" class="history-grid" />
         <text :x="PAD.left - 6" :y="tick.y + 4" text-anchor="end" class="history-axis">{{ tick.label }}</text>
       </g>
-      <text :x="PAD.left - 6" :y="PAD.top - 2" text-anchor="end" class="history-axis">{{ unit }}</text>
+      <text :x="PAD.left - 6" :y="8" text-anchor="end" class="history-axis">{{ unit }}</text>
       <text
         v-for="tick in xTicks"
         :key="`x-${tick.x}`"
